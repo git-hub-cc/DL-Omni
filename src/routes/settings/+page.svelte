@@ -57,18 +57,56 @@
       
       <div class="flex justify-between items-center">
         <div>
-          <div class="text-sm font-medium text-zinc-200">下载格式偏好</div>
-          <div class="text-xs text-zinc-500 mt-1">设置默认是否同时下载视频与音频</div>
+          <div class="text-sm font-medium text-zinc-200">分开下载音频与视频</div>
+          <div class="text-xs text-zinc-500 mt-1">开启后音频与视频将作为独立文件分别保存</div>
         </div>
         <label class="relative inline-flex items-center cursor-pointer">
           <input 
             type="checkbox" 
             class="sr-only peer" 
-            checked={config.include_audio}
-            onchange={(e) => configStore.update({ include_audio: e.currentTarget.checked })}
+            checked={config.split_audio_video}
+            onchange={(e) => configStore.update({ split_audio_video: e.currentTarget.checked })}
           >
           <div class="w-11 h-6 bg-zinc-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-accent-blue"></div>
         </label>
+      </div>
+
+      <hr class="border-zinc-800">
+
+      <div>
+        <div class="text-sm font-medium text-zinc-200 mb-3">默认视频画质</div>
+        <div class="grid grid-cols-5 gap-2">
+          {#each ['best', '1080p', '720p', '480p', '360p'] as q}
+            <button
+              class="py-1.5 text-xs font-medium rounded-lg border transition-all
+                {config.video_quality === q
+                  ? 'bg-accent-blue/20 border-accent-blue text-accent-blue'
+                  : 'bg-zinc-800/50 border-zinc-700 text-zinc-400 hover:border-zinc-500 hover:text-zinc-200'}"
+              onclick={() => configStore.update({ video_quality: q })}
+            >
+              {q === 'best' ? '最高' : q}
+            </button>
+          {/each}
+        </div>
+        <div class="text-xs text-zinc-600 mt-2">选择最高时 yt-dlp 将自动选取可用的最佳画质</div>
+      </div>
+
+      <div>
+        <div class="text-sm font-medium text-zinc-200 mb-3">默认音频音质</div>
+        <div class="grid grid-cols-4 gap-2">
+          {#each ['best', '320k', '128k', '64k'] as q}
+            <button
+              class="py-1.5 text-xs font-medium rounded-lg border transition-all
+                {config.audio_quality === q
+                  ? 'bg-accent-blue/20 border-accent-blue text-accent-blue'
+                  : 'bg-zinc-800/50 border-zinc-700 text-zinc-400 hover:border-zinc-500 hover:text-zinc-200'}"
+              onclick={() => configStore.update({ audio_quality: q })}
+            >
+              {q === 'best' ? '最高' : q}
+            </button>
+          {/each}
+        </div>
+        <div class="text-xs text-zinc-600 mt-2">选择最高时 yt-dlp 将自动选取可用的最佳音质</div>
       </div>
       
       <hr class="border-zinc-800">

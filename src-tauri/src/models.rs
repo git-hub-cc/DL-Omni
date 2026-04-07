@@ -74,5 +74,7 @@ pub struct Config {
     pub proxy_url: Option<String>,
     pub theme: String,
     pub yt_dlp_version: Option<String>,
-    pub include_audio: bool, // 新增：是否同时下载音视频
+    pub split_audio_video: bool, // 是否分开下载音频与视频（各保存为独立文件）
+    pub video_quality: String,   // 视频画质偏好: "best" | "1080p" | "720p" | "480p" | "360p"
+    pub audio_quality: String,   // 音频音质偏好: "best" | "128k" | "64k"
 }

@@ -9,7 +9,9 @@ class ConfigStore {
     max_threads_per_task: 16,
     proxy_url: '',
     theme: 'system',
-    include_audio: false, // 新增：默认配置为不包含音频（仅视频）
+    split_audio_video: false, // 默认合并下载（音视频合为一个文件）
+    video_quality: 'best',    // 默认最高画质
+    audio_quality: 'best',    // 默认最高音质
   });
 
   /**

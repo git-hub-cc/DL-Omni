@@ -37,7 +37,9 @@ export interface Config {
   proxy_url: string;
   theme: 'dark' | 'light' | 'system';
   yt_dlp_version?: string;
-  include_audio: boolean;    // 新增：是否同时下载音视频
+  split_audio_video: boolean;  // 是否分开下载音频与视频（各保存为独立文件）
+  video_quality: string;       // 视频画质偏好: 'best' | '1080p' | '720p' | '480p' | '360p'
+  audio_quality: string;       // 音频音质偏好: 'best' | '128k' | '64k'
 }
 
 /**

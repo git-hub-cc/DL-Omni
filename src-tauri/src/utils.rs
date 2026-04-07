@@ -38,3 +38,43 @@ pub fn sanitize_filename(name: &str) -> String {
     let re = Regex::new(r#"[\\/:*?"<>|]"#).unwrap();
     re.replace_all(name, "_").to_string()
 }
+
+/// 获取目标平台特定的 ffmpeg 运行文件名
+pub fn get_ffmpeg_filename() -> &'static str {
+    #[cfg(target_os = "windows")]
+    return "ffmpeg.exe";
+    
+    #[cfg(target_os = "macos")]
+    return "ffmpeg";
+    
+    #[cfg(target_os = "linux")]
+    return "ffmpeg";
+}
+
+/// 获取 ffmpeg-static Github Release 中对应的资产包名称
+pub fn get_ffmpeg_asset_name() -> &'static str {
+    #[cfg(target_os = "windows")]
+    return "ffmpeg-win32-x64";
+    
+    #[cfg(target_os = "macos")]
+    {
+        #[cfg(target_arch = "aarch64")]
+        return "ffmpeg-darwin-arm64";
+        #[cfg(not(target_arch = "aarch64"))]
+        return "ffmpeg-darwin-x64";
+    }
+    
+    #[cfg(target_os = "linux")]
+    {
+        #[cfg(target_arch = "aarch64")]
+        return "ffmpeg-linux-arm64";
+        #[cfg(not(target_arch = "aarch64"))]
+        return "ffmpeg-linux-x64";
+    }
+}
+
+/// 获取当前环境下 ffmpeg 的运行路径
+pub fn get_ffmpeg_path(app: &AppHandle) -> Result<String, String> {
+    let bin_path = get_binary_dir(app).join(get_ffmpeg_filename());
+    Ok(bin_path.to_string_lossy().to_string())
+}

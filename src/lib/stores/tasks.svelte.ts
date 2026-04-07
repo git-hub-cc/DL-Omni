@@ -113,8 +113,23 @@ class TaskStore {
         return; 
       }
       
-      const includeAudio = configStore.settings.include_audio;
-      const formatId = includeAudio ? "bv*+ba/b" : "bv*"; 
+      const { split_audio_video, video_quality, audio_quality } = configStore.settings;
+
+      // 构建视频画质过滤条件
+      const videoFilter = video_quality === 'best'
+        ? 'bv*'
+        : `bv[height<=${video_quality.replace('p', '')}]`;
+
+      // 构建音频画质过滤条件
+      const audioFilter = audio_quality === 'best'
+        ? 'ba'
+        : `ba[abr<=${audio_quality.replace('k', '')}]`;
+
+      // split_audio_video=true → 分开下载，保留独立音视频文件
+      // split_audio_video=false → 自动合并为单一文件（最佳格式优先）
+      const formatId = split_audio_video
+        ? `${videoFilter}/${audioFilter}`           // 分开：只取视频流或音频流（不合并）
+        : `${videoFilter}+${audioFilter}/b`;        // 合并：视频+音频，回退到最佳单一格式
       
       const title = info.title || "未知标题";
       const thumbnail: string | undefined = info.thumbnail || undefined;

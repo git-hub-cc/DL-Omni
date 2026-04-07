@@ -72,17 +72,49 @@ fn parse_eta(eta_str: &str) -> u64 {
 pub async fn download_via_ytdlp(app: AppHandle, state: AppState, task: &Task) -> Result<u64, String> {
     let ytdlp_path = utils::get_ytdlp_path(&app)?;
 
-    let (save_dir, max_threads) = {
+    let (save_dir, max_threads, split_av) = {
         let config = state.config.lock().await;
-        (config.settings.default_download_path.clone(), config.settings.max_threads_per_task.max(1))
+        (
+            config.settings.default_download_path.clone(), 
+            config.settings.max_threads_per_task.max(1),
+            config.settings.split_audio_video
+        )
     };
 
+    let mut format_arg = task.format_id.clone();
+    
+    if split_av {
+        // 分开下载逻辑：将 `+` 改为 `,` 以触发独立的双文件下载
+        if format_arg.contains('+') {
+            format_arg = format_arg.replace('+', ",");
+        } else if !format_arg.contains(',') && format_arg != "best" {
+            // 加载缺失的音频（如果有）
+            format_arg = format!("{},bestaudio", format_arg);
+        }
+    } else {
+        // 合并下载逻辑：确保使用 `+`（除非是本身内置音画的 best 标签）
+        if format_arg.contains(',') {
+            format_arg = format_arg.replace(',', "+");
+        } else if !format_arg.contains('+') && format_arg != "best" {
+            // 如果仅申请了无声音频或视频的单轨道，则强行绑定最优音频以保证能够 "音画合一"
+            format_arg = format!("{}+bestaudio", format_arg);
+        }
+    }
+
     let mut cmd = Command::new(&ytdlp_path);
-    cmd.arg("-f")
-        .arg(&task.format_id)
-        .arg("--merge-output-format")
-        .arg("mp4")
-        .arg("-P")
+    cmd.arg("-f").arg(&format_arg);
+    
+    // 如果没有勾选 "分开下载音频与视频"，则执行合并逻辑
+    if !split_av {
+        cmd.arg("--merge-output-format").arg("mp4");
+        
+        // 指定静态轻量版 ffmpeg 的绝对路径，以接管音画合并环节
+        if let Ok(ffmpeg_path) = utils::get_ffmpeg_path(&app) {
+            cmd.arg("--ffmpeg-location").arg(ffmpeg_path);
+        }
+    }
+
+    cmd.arg("-P")
         .arg(save_dir)
         .arg("--concurrent-fragments")
         .arg(max_threads.to_string())

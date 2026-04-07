@@ -49,7 +49,9 @@ impl ConfigManager {
             proxy_url: None,
             theme: String::from("system"),
             yt_dlp_version: None,
-            include_audio: false, // 新增：默认仅下载视频
+            split_audio_video: false,           // 默认合并下载（音视频合为一个文件）
+            video_quality: String::from("best"), // 默认最高画质
+            audio_quality: String::from("best"), // 默认最高音质
         }
     }
 

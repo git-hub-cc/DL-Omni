@@ -41,6 +41,9 @@ pub fn run() {
 
             // 检查或下载内置环境依赖 (如 yt-dlp)
             engine::updater::ensure_binary_exists(app.handle().clone());
+            
+            // 检查或下载轻量化二进制 ffmpeg (音视频合并)
+            engine::updater::ensure_ffmpeg_exists(app.handle().clone());
 
             Ok(())
         })
