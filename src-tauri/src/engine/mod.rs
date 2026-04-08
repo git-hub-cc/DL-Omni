@@ -23,8 +23,14 @@ pub async fn dispatch_task(app: AppHandle, state: AppState, mut task: Task) -> R
 
     // 创建一个 Tokio 异步任务
     let handle = tokio::spawn(async move {
-        // [修改] 双轨制调度：判断是否为静态文件直链
-        let result = if crate::utils::is_direct_link(&task.url) {
+        // 【修改】强制嗅探旁路逻辑：增加对 m3u8 的特判拦截
+        let is_m3u8 = crate::utils::is_m3u8_link(&task.url);
+        
+        // 如果明确是 m3u8 格式，即使带有专属 HTTP 头部或格式被指定为 direct，也绝对不能走原生直链下载
+        let is_forced_native = (task.http_headers.is_some() || task.format_id == "direct") && !is_m3u8;
+        let is_direct_link = crate::utils::is_direct_link(&task.url) && !is_m3u8;
+
+        let result = if is_forced_native || is_direct_link {
             downloader::download_native(app_clone, state_clone.clone(), &task).await
         } else {
             ytdlp::download_via_ytdlp(app_clone, state_clone.clone(), &task).await

@@ -19,7 +19,8 @@ pub struct Task {
     pub thumbnail: Option<String>,
     pub status: TaskStatus,
     pub format_id: String,
-    pub playlist_items: Option<String>, // 新增：合集下载范围 (如 "1,3,5-7")
+    pub playlist_items: Option<String>, 
+    pub http_headers: Option<String>, // 【新增】保存嗅探到的专属请求头 (如 JSON 格式的 Referer/User-Agent)
     pub total_bytes: u64,
     pub downloaded_bytes: u64,
     pub speed: f64,
@@ -35,7 +36,8 @@ impl Task {
         title: String,
         thumbnail: Option<String>,
         format_id: String,
-        playlist_items: Option<String>, // 新增：支持创建任务时携带合集项
+        playlist_items: Option<String>,
+        http_headers: Option<String>, // 【新增】支持传入动态 Header
     ) -> Self {
         Self {
             id,
@@ -45,6 +47,7 @@ impl Task {
             status: TaskStatus::Pending,
             format_id,
             playlist_items,
+            http_headers,
             total_bytes: 0,
             downloaded_bytes: 0,
             speed: 0.0,
@@ -66,7 +69,6 @@ pub struct MediaFormat {
     pub format_note: Option<String>,
 }
 
-// 新增：合集子项的简要信息
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct PlaylistItem {
     pub playlist_index: Option<u32>,
@@ -83,7 +85,7 @@ pub struct MediaInfo {
     pub duration: f64,
     pub thumbnail: String,
     pub formats: Vec<MediaFormat>,
-    pub playlist_entries: Option<Vec<PlaylistItem>>, // 新增：存储解析出的合集列表
+    pub playlist_entries: Option<Vec<PlaylistItem>>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -97,6 +99,15 @@ pub struct Config {
     pub split_audio_video: bool,
     pub video_quality: String,
     pub audio_quality: String,
-    pub browser_cookie: Option<String>, // 新增：使用的浏览器 Cookie 名称 (如 "chrome")
-    pub include_metadata: bool,         // 新增：是否生成独立文件夹并包含元数据
+    pub browser_cookie: Option<String>,
+    pub include_metadata: bool,
+}
+
+// 【新增】专门用于接收前端嗅探器发送的复杂资源数据结构
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct SniffedResource {
+    pub url: String,
+    pub r#type: String,
+    pub filename: String,
+    pub headers: Option<std::collections::HashMap<String, String>>, // 动态请求头集合
 }

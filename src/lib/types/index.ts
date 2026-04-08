@@ -19,7 +19,8 @@ export interface Task {
   thumbnail?: string;        // 缩略图路径 (本地缓存或 URL)
   status: TaskStatus;        // 当前状态
   format_id: string;         // 用户选择的 yt-dlp format_id
-  playlist_items?: string;   // 【新增】合集下载范围 (如 "1,3,5-7")
+  playlist_items?: string;   // 合集下载范围 (如 "1,3,5-7")
+  http_headers?: string;     // 【新增】绑定的自定义 HTTP 请求头 (JSON 字符串格式)
   total_bytes: number;       // 文件总大小 (字节)
   downloaded_bytes: number;  // 已下载大小 (字节)
   speed: number;             // 当前下载速度 (Bytes/s)
@@ -38,11 +39,11 @@ export interface Config {
   proxy_url: string;
   theme: 'dark' | 'light' | 'system';
   yt_dlp_version?: string;
-  split_audio_video: boolean;  // 是否分开下载音频与视频（各保存为独立文件）
-  video_quality: string;       // 视频画质偏好: 'best' | '1080p' | '720p' | '480p' | '360p'
-  audio_quality: string;       // 音频音质偏好: 'best' | '128k' | '64k'
-  browser_cookie: string;      // 【新增】使用的浏览器 Cookie，"none" 为不使用
-  include_metadata: boolean;   // 【新增】是否包含元数据并使用独立文件夹模式
+  split_audio_video: boolean;  
+  video_quality: string;       
+  audio_quality: string;       
+  browser_cookie: string;      
+  include_metadata: boolean;   
 }
 
 /**
@@ -50,16 +51,16 @@ export interface Config {
  */
 export interface MediaFormat {
   format_id: string;
-  ext: string;               // 扩展名 (如 mp4, webm)
-  resolution: string;        // 分辨率 (如 1920x1080)
-  filesize?: number;         // 预估文件大小
-  vcodec: string;            // 视频编码
-  acodec: string;            // 音频编码
-  format_note?: string;      // 格式备注 (如 1080p Premium)
+  ext: string;               
+  resolution: string;        
+  filesize?: number;         
+  vcodec: string;            
+  acodec: string;            
+  format_note?: string;      
 }
 
 /**
- * 【新增】合集子项简要信息
+ * 合集子项简要信息
  */
 export interface PlaylistItem {
   playlist_index?: number;
@@ -78,5 +79,15 @@ export interface MediaInfo {
   duration: number;
   thumbnail: string;
   formats: MediaFormat[];
-  playlist_entries?: PlaylistItem[]; // 【新增】如果是合集则包含此列表
+  playlist_entries?: PlaylistItem[]; 
+}
+
+/**
+ * 【新增】高级嗅探器捕获的资源数据结构
+ */
+export interface SniffedResource {
+  url: string;
+  type: string;
+  filename: string;
+  headers?: Record<string, string>; // 动态提取的请求头集合
 }

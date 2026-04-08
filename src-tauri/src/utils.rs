@@ -37,7 +37,7 @@ pub fn sanitize_filename(name: &str) -> String {
     re.replace_all(name, "_").to_string()
 }
 
-/// [新增] 从普通的直链 URL 中提取文件名
+/// 从普通的直链 URL 中提取文件名
 pub fn extract_filename_from_url(url: &str) -> String {
     // 去除 URL 参数部分 ?xxx=yyy
     let parsed_url = url.split('?').next().unwrap_or(url);
@@ -51,7 +51,13 @@ pub fn extract_filename_from_url(url: &str) -> String {
     "unknown_file".to_string()
 }
 
-/// [新增] 检查给定的 URL 是否为常见静态文件的直链
+/// [新增] 检查给定的 URL 是否为 m3u8 媒体流索引文件
+pub fn is_m3u8_link(url: &str) -> bool {
+    let clean_url = url.split('?').next().unwrap_or(url).to_lowercase();
+    clean_url.ends_with(".m3u8")
+}
+
+/// 检查给定的 URL 是否为常见静态文件的直链
 pub fn is_direct_link(url: &str) -> bool {
     let clean_url = url.split('?').next().unwrap_or(url).to_lowercase();
     // 覆盖常见的普通二进制/压缩包/文档/部分独立媒体格式

@@ -59,7 +59,8 @@ pub fn run() {
             commands::check_engine_update,
             commands::update_config,
             commands::get_config,
-            commands::start_sniffing // [新增] 注册嗅探指令
+            commands::start_sniffing,
+            commands::stop_sniffing // 【修复】在此处注册缺失的销毁指令
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

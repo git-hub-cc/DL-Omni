@@ -9,12 +9,10 @@ pub async fn parse_url(
     app: AppHandle,
     state: State<'_, AppState>
 ) -> Result<MediaInfo, String> {
-    // [修改] 解析前先判断是否为直链
     if crate::utils::is_direct_link(&url) {
         return engine::downloader::get_direct_link_info(&url).await;
     }
 
-    // 非直链则走 yt-dlp 解析
     engine::ytdlp::parse_media_info(&url, app, state.inner().clone())
         .await
         .map_err(|e| format!("解析失败: {}", e))
@@ -27,6 +25,7 @@ pub async fn create_task(
     thumbnail: Option<String>,
     format_id: String,
     playlist_items: Option<String>, 
+    http_headers: Option<String>, // 【新增】接收前端传来的动态 Header (序列化后的 JSON 字符串)
     app: AppHandle,
     state: State<'_, AppState>
 ) -> Result<String, String> {
@@ -38,7 +37,8 @@ pub async fn create_task(
         title,
         thumbnail,
         format_id.clone(),
-        playlist_items
+        playlist_items,
+        http_headers // 【新增】将 Header 存入任务结构体
     );
 
     {

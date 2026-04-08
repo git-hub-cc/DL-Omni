@@ -16,11 +16,10 @@ impl Db {
         let db_path = app_dir.join("tasks.db");
         let conn = Connection::open(db_path)?;
 
-        // 开启 WAL 模式，防止高频读写导致数据库锁死
         conn.pragma_update(None, "journal_mode", "WAL")?;
         conn.pragma_update(None, "synchronous", "NORMAL")?;
 
-        // 初始化表结构 (新增 playlist_items)
+        // 【修改】初始化表结构 (新增 http_headers)
         conn.execute(
             "CREATE TABLE IF NOT EXISTS tasks (
                 id TEXT PRIMARY KEY,
@@ -35,50 +34,49 @@ impl Db {
                 eta INTEGER DEFAULT 0,
                 created_at INTEGER NOT NULL,
                 error_msg TEXT,
-                playlist_items TEXT
+                playlist_items TEXT,
+                http_headers TEXT
             )",
             [],
         )?;
 
-        // 针对已存在的旧版数据库，尝试追加 playlist_items 字段 (平滑迁移)
+        // 平滑迁移旧数据库
         let _ = conn.execute("ALTER TABLE tasks ADD COLUMN playlist_items TEXT", []);
+        let _ = conn.execute("ALTER TABLE tasks ADD COLUMN http_headers TEXT", []); // 【新增】字段迁移
 
         let mut db = Self { conn };
-        db.recover_orphan_tasks()?; // 处理异常退出导致的僵尸任务
+        db.recover_orphan_tasks()?; 
         Ok(db)
     }
 
-    /// 插入新任务
     pub fn insert_task(&self, task: &Task) -> SqlResult<()> {
         let status_str = serde_json::to_string(&task.status).unwrap_or_default().replace("\"", "");
         self.conn.execute(
-            "INSERT INTO tasks (id, url, title, thumbnail, status, format_id, total_bytes, downloaded_bytes, speed, eta, created_at, error_msg, playlist_items)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+            "INSERT INTO tasks (id, url, title, thumbnail, status, format_id, total_bytes, downloaded_bytes, speed, eta, created_at, error_msg, playlist_items, http_headers)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
             params![
                 task.id, task.url, task.title, task.thumbnail, status_str, task.format_id,
-                task.total_bytes, task.downloaded_bytes, task.speed, task.eta, task.created_at, task.error_msg, task.playlist_items
+                task.total_bytes, task.downloaded_bytes, task.speed, task.eta, task.created_at, 
+                task.error_msg, task.playlist_items, task.http_headers
             ],
         )?;
         Ok(())
     }
 
-    /// 更新任务状态
     pub fn update_status(&self, id: &str, status: TaskStatus) -> SqlResult<()> {
         let status_str = serde_json::to_string(&status).unwrap_or_default().replace("\"", "");
         self.conn.execute("UPDATE tasks SET status = ?1 WHERE id = ?2", params![status_str, id])?;
         Ok(())
     }
 
-    /// 更新任务最终状态和文件大小
     pub fn update_task_finish(&self, id: &str, status: TaskStatus, total_bytes: u64) -> SqlResult<()> {
         let status_str = serde_json::to_string(&status).unwrap_or_default().replace("\"", "");
         self.conn.execute("UPDATE tasks SET status = ?1, total_bytes = ?2, downloaded_bytes = ?2 WHERE id = ?3", params![status_str, total_bytes, id])?;
         Ok(())
     }
 
-    /// 获取所有任务
     pub fn get_all_tasks(&self) -> SqlResult<Vec<Task>> {
-        let mut stmt = self.conn.prepare("SELECT id, url, title, thumbnail, status, format_id, total_bytes, downloaded_bytes, speed, eta, created_at, error_msg, playlist_items FROM tasks ORDER BY created_at DESC")?;
+        let mut stmt = self.conn.prepare("SELECT id, url, title, thumbnail, status, format_id, total_bytes, downloaded_bytes, speed, eta, created_at, error_msg, playlist_items, http_headers FROM tasks ORDER BY created_at DESC")?;
         let task_iter = stmt.query_map([], |row| {
             let status_str: String = row.get(4)?;
             let status: TaskStatus = serde_json::from_str(&format!("\"{}\"", status_str)).unwrap_or(TaskStatus::Error);
@@ -97,6 +95,7 @@ impl Db {
                 created_at: row.get(10)?,
                 error_msg: row.get(11)?,
                 playlist_items: row.get(12)?,
+                http_headers: row.get(13)?, // 【新增】读取 header
             })
         })?;
 
@@ -107,9 +106,8 @@ impl Db {
         Ok(tasks)
     }
 
-    /// 获取单条任务详情
     pub fn get_task(&self, id: &str) -> SqlResult<Option<Task>> {
-        let mut stmt = self.conn.prepare("SELECT id, url, title, thumbnail, status, format_id, total_bytes, downloaded_bytes, speed, eta, created_at, error_msg, playlist_items FROM tasks WHERE id = ?1")?;
+        let mut stmt = self.conn.prepare("SELECT id, url, title, thumbnail, status, format_id, total_bytes, downloaded_bytes, speed, eta, created_at, error_msg, playlist_items, http_headers FROM tasks WHERE id = ?1")?;
         let mut rows = stmt.query(params![id])?;
 
         if let Some(row) = rows.next()? {
@@ -130,25 +128,23 @@ impl Db {
                 created_at: row.get(10)?,
                 error_msg: row.get(11)?,
                 playlist_items: row.get(12)?,
+                http_headers: row.get(13)?, // 【新增】读取 header
             }))
         } else {
             Ok(None)
         }
     }
 
-    /// 删除任务
     pub fn delete_task(&self, id: &str) -> SqlResult<()> {
         self.conn.execute("DELETE FROM tasks WHERE id = ?1", params![id])?;
         Ok(())
     }
 
-    /// 清空所有已完成的历史任务
     pub fn clear_history(&self) -> SqlResult<()> {
         self.conn.execute("DELETE FROM tasks WHERE status = '\"completed\"' OR status = 'completed'", [])?;
         Ok(())
     }
 
-    /// 恢复意外退出导致仍处于 "downloading" 的孤儿任务为 "paused"
     fn recover_orphan_tasks(&mut self) -> SqlResult<()> {
         self.conn.execute(
             "UPDATE tasks SET status = 'paused', speed = 0.0 WHERE status = 'downloading' OR status = 'merging'",

@@ -14,7 +14,6 @@
   let isParsing = $state(false);
   let parseError = $state('');
 
-  // 浏览器 Cookie 选项
   const browsers = [
     { id: 'none', label: '不使用 Cookie' },
     { id: 'chrome', label: 'Google Chrome' },
@@ -24,12 +23,10 @@
     { id: 'brave', label: 'Brave Browser' }
   ];
 
-  // 合集选择流状态
   let parsedInfo = $state<MediaInfo | null>(null);
   let showPlaylistModal = $state(false);
   let selectedItems = $state<Set<number>>(new Set());
 
-  // 当前激活的任务列表视图
   let displayTasks = $derived.by(() => {
     switch (activeTab) {
       case 'active': return taskStore.activeTasks;
@@ -38,7 +35,6 @@
     }
   });
 
-  // 第一步：解析 URL
   async function handleParse() {
     if (!inputUrl) return;
     parseError = '';
@@ -48,18 +44,15 @@
       const info = await IPC.parseUrl(inputUrl);
       parsedInfo = info;
       
-      // 判断是否为合集
       if (info.playlist_entries && info.playlist_entries.length > 1) {
-        // 打开合集勾选界面
         showNewTaskModal = false;
-        // 默认全选
         selectedItems = new Set(info.playlist_entries.map((_, i) => i + 1));
         showPlaylistModal = true;
       } else {
-        // 单视频，直接提交
         showNewTaskModal = false;
-        const tempId = taskStore.createTempTask(inputUrl);
-        await taskStore.commitTask(tempId, inputUrl, info);
+        // 【修改】主页手动解析时不携带 HTTP Headers，显式传入 undefined
+        const tempId = taskStore.createTempTask(inputUrl, undefined);
+        await taskStore.commitTask(tempId, inputUrl, info, undefined, undefined);
         inputUrl = '';
       }
     } catch (e: any) {
@@ -69,17 +62,16 @@
     }
   }
 
-  // 第二步：提交合集勾选
   async function handleCommitPlaylist() {
     if (!parsedInfo || selectedItems.size === 0) return;
     
     const itemsArray = Array.from(selectedItems).sort((a, b) => a - b);
-    
     const playlistItemsStr = itemsArray.join(',');
     
     showPlaylistModal = false;
-    const tempId = taskStore.createTempTask(inputUrl);
-    await taskStore.commitTask(tempId, inputUrl, parsedInfo, playlistItemsStr);
+    // 【修改】合集提交时不携带 HTTP Headers，显式传入 undefined
+    const tempId = taskStore.createTempTask(inputUrl, undefined);
+    await taskStore.commitTask(tempId, inputUrl, parsedInfo, playlistItemsStr, undefined);
     
     inputUrl = '';
     parsedInfo = null;
@@ -104,7 +96,6 @@
     selectedItems = new Set(selectedItems);
   }
 
-  // 任务快捷操作
   async function handleToggleTask(taskId: string, status: string) {
     try {
       if (status === 'paused' || status === 'error') {
@@ -170,6 +161,9 @@
             {/if}
             {#if task.playlist_items}
               <div class="absolute bottom-1 right-1 bg-black/70 px-1 rounded text-[9px] font-mono border border-zinc-700/50">合集</div>
+            {/if}
+            {#if task.http_headers}
+              <div class="absolute top-1 left-1 bg-emerald-500/80 px-1 rounded text-[9px] font-mono border border-emerald-400/50">嗅探</div>
             {/if}
           </div>
 
@@ -250,7 +244,7 @@
         </div>
       {/if}
       <div class="text-[11px] text-zinc-500">
-        💡 提示：使用对应浏览器 Cookie 解析可突破 B站 1080P 或高画质会员限制。
+        💡 提示：使用对应浏览器 Cookie 解析可突破 B站 1080P 或高画质会员限制。若直接解析失败，请尝试左侧菜单栏的“嗅探”功能。
       </div>
     </div>
   </Modal>

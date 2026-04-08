@@ -2,24 +2,22 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::io::SeekFrom;
 use tokio::io::{AsyncWriteExt, AsyncSeekExt};
-use reqwest::Client;
+use reqwest::{Client, header::{HeaderMap, HeaderName, HeaderValue}};
 use tauri::AppHandle;
+use std::str::FromStr;
 use crate::models::{MediaInfo, Task, TaskStatus};
 use crate::state::{AppState, TaskProgressUpdate};
 use crate::utils;
 
-// 伪装浏览器 UA，防止被 Github AWS S3 或 Cloudflare 等直接 403 阻截
-const USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+const DEFAULT_USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
 
-/// 在解析阶段快速拉取直链信息并伪装成 MediaInfo 对象
 pub async fn get_direct_link_info(url: &str) -> Result<MediaInfo, String> {
     let client = Client::builder()
-        .user_agent(USER_AGENT)
+        .user_agent(DEFAULT_USER_AGENT)
         .timeout(std::time::Duration::from_secs(15))
         .build()
         .map_err(|e| e.to_string())?;
 
-    // 尝试发一个极小带宽的 GET 请求取代 HEAD，测试连通性
     let _ = client.get(url).header("Range", "bytes=0-0").send().await;
 
     let filename = utils::extract_filename_from_url(url);
@@ -34,22 +32,34 @@ pub async fn get_direct_link_info(url: &str) -> Result<MediaInfo, String> {
     })
 }
 
-/// 针对直链或分片流的原生多线程/单线程流下载引擎
+/// 针对直链或分片流的原生多线程下载引擎
 pub async fn download_native(_app: AppHandle, state: AppState, task: &Task) -> Result<u64, String> {
+    // 1. 解析任务自带的动态 HTTP Headers (由嗅探器捕获的防盗链信息)
+    let mut headers = HeaderMap::new();
+    if let Some(headers_json) = &task.http_headers {
+        if let Ok(parsed_headers) = serde_json::from_str::<std::collections::HashMap<String, String>>(headers_json) {
+            for (k, v) in parsed_headers {
+                if let (Ok(name), Ok(value)) = (HeaderName::from_str(&k), HeaderValue::from_str(&v)) {
+                    headers.insert(name, value);
+                }
+            }
+        }
+    }
+
+    // 2. 注入 Headers 构建 Client
     let client = Client::builder()
-        .user_agent(USER_AGENT)
+        .user_agent(DEFAULT_USER_AGENT)
+        .default_headers(headers) // 应用动态请求头
         .timeout(std::time::Duration::from_secs(30))
         .build()
         .map_err(|e| e.to_string())?;
 
     let mut total_size = 0;
 
-    // 方案 1: 尝试 HEAD 请求获取体积
     if let Ok(res) = client.head(&task.url).send().await {
         total_size = res.content_length().unwrap_or(0);
     }
 
-    // 方案 2: 若 HEAD 失败 (如 S3 限制)，尝试用 GET 拉取第一字节分析 Content-Range
     if total_size == 0 {
         if let Ok(res) = client.get(&task.url).header("Range", "bytes=0-0").send().await {
             if let Some(cr) = res.headers().get(reqwest::header::CONTENT_RANGE) {
@@ -65,10 +75,8 @@ pub async fn download_native(_app: AppHandle, state: AppState, task: &Task) -> R
         }
     }
 
-    // 若依然无法获取体积，则认为是不支持断点及多线程的服务器，触发流式单线程降级
     let is_stream_fallback = total_size == 0;
 
-    // 读取全局配置
     let (save_dir, mut threads) = {
         let config = state.config.lock().await;
         (
@@ -78,7 +86,7 @@ pub async fn download_native(_app: AppHandle, state: AppState, task: &Task) -> R
     };
 
     if is_stream_fallback || total_size < 1024 * 1024 * 5 {
-        threads = 1; // 体积过小或未知体积，强行单线程
+        threads = 1; 
     }
 
     std::fs::create_dir_all(&save_dir).map_err(|e| e.to_string())?;
@@ -88,9 +96,11 @@ pub async fn download_native(_app: AppHandle, state: AppState, task: &Task) -> R
     } else {
         task.title.clone()
     };
-    let file_path = std::path::Path::new(&save_dir).join(&filename);
+    
+    // 确保文件名带有正确后缀，对于动态直链非常重要
+    let final_filename = if !filename.contains('.') { format!("{}.mp4", filename) } else { filename };
+    let file_path = std::path::Path::new(&save_dir).join(&final_filename);
 
-    // 预分配空文件占位
     {
         let file = std::fs::File::create(&file_path).map_err(|e| e.to_string())?;
         if !is_stream_fallback {
@@ -104,12 +114,7 @@ pub async fn download_native(_app: AppHandle, state: AppState, task: &Task) -> R
 
     let writer_path = file_path.clone();
     let writer_handle = tokio::spawn(async move {
-        let mut file = tokio::fs::OpenOptions::new()
-            .write(true)
-            .open(&writer_path)
-            .await
-            .unwrap();
-        
+        let mut file = tokio::fs::OpenOptions::new().write(true).open(&writer_path).await.unwrap();
         while let Some((offset, chunk)) = rx.recv().await {
             if file.seek(SeekFrom::Start(offset)).await.is_ok() {
                 let _ = file.write_all(&chunk).await;
@@ -117,7 +122,6 @@ pub async fn download_native(_app: AppHandle, state: AppState, task: &Task) -> R
         }
     });
 
-    // 进度汇报定时器任务
     let reporter_total = total_size;
     let state_clone = state.clone();
     let task_id = task.id.clone();
@@ -146,14 +150,11 @@ pub async fn download_native(_app: AppHandle, state: AppState, task: &Task) -> R
             });
 
             last_bytes = current_bytes;
-            if reporter_total > 0 && current_bytes >= reporter_total {
-                break;
-            }
+            if reporter_total > 0 && current_bytes >= reporter_total { break; }
         }
     });
 
     if is_stream_fallback {
-        // 单线程死磕模式 (无需指定 Range，直接强行流式落盘)
         let url = task.url.clone();
         let tx = tx.clone();
         let downloaded = downloaded.clone();
@@ -164,16 +165,13 @@ pub async fn download_native(_app: AppHandle, state: AppState, task: &Task) -> R
                 let mut current_offset = 0;
                 while let Ok(Some(chunk)) = res.chunk().await {
                     let len = chunk.len() as u64;
-                    if tx.send((current_offset, chunk)).await.is_err() {
-                        break;
-                    }
+                    if tx.send((current_offset, chunk)).await.is_err() { break; }
                     current_offset += len;
                     downloaded.fetch_add(len, Ordering::Relaxed);
                 }
             }
         }));
     } else {
-        // 多线程并发分片模式
         let chunk_size = total_size / threads;
         for i in 0..threads {
             let start = i * chunk_size;
@@ -189,9 +187,7 @@ pub async fn download_native(_app: AppHandle, state: AppState, task: &Task) -> R
                     let mut current_offset = start;
                     while let Ok(Some(chunk)) = res.chunk().await {
                         let len = chunk.len() as u64;
-                        if tx.send((current_offset, chunk)).await.is_err() {
-                            break;
-                        }
+                        if tx.send((current_offset, chunk)).await.is_err() { break; }
                         current_offset += len;
                         downloaded.fetch_add(len, Ordering::Relaxed);
                     }
@@ -202,20 +198,14 @@ pub async fn download_native(_app: AppHandle, state: AppState, task: &Task) -> R
 
     drop(tx);
 
-    for handle in handles {
-        let _ = handle.await;
-    }
+    for handle in handles { let _ = handle.await; }
     let _ = writer_handle.await;
     reporter_handle.abort();
 
-    let final_size = if is_stream_fallback {
-        downloaded.load(Ordering::Relaxed)
-    } else {
-        total_size
-    };
+    let final_size = if is_stream_fallback { downloaded.load(Ordering::Relaxed) } else { total_size };
 
     if final_size == 0 {
-        return Err("下载失败: 链接已失效、或者服务器拒绝连接 (403 Forbidden)".into());
+        return Err("下载失败: 链接已失效或服务器因缺少 Header/Cookie 拒绝了连接 (403/401)".into());
     }
 
     Ok(final_size)

@@ -1,6 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
-import type { MediaInfo, Task } from '$lib/types';
+import type { MediaInfo, Task, SniffedResource } from '$lib/types';
 import { taskStore } from '$lib/stores/tasks.svelte';
 
 export const IPC = {
@@ -13,14 +13,16 @@ export const IPC = {
     title: string, 
     thumbnail: string | undefined, 
     formatId: string,
-    playlistItems?: string // 【新增】合集选择范围透传
+    playlistItems?: string,
+    httpHeaders?: string // 【新增】透传请求头到 Rust
   ): Promise<string> {
     return await invoke<string>('create_task', { 
       url, 
       title, 
       thumbnail, 
       formatId, 
-      playlistItems 
+      playlistItems,
+      httpHeaders // 后端已在 payload 中接收此字段
     });
   },
 
@@ -69,8 +71,9 @@ export const IPC = {
     });
   },
 
-  async listenSniffedResources(callback: (resource: any) => void): Promise<UnlistenFn> {
-    return await listen<any>('sniffed_resource', (event) => {
+  // 【修改】回调参数使用规范的 SniffedResource 类型
+  async listenSniffedResources(callback: (resource: SniffedResource) => void): Promise<UnlistenFn> {
+    return await listen<SniffedResource>('sniffed_resource', (event) => {
       callback(event.payload);
     });
   }

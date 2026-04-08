@@ -18,10 +18,9 @@ pub async fn parse_media_info(url: &str, app: AppHandle, state: AppState) -> Res
 
     let mut cmd = Command::new(&ytdlp_path);
 
-    // 👇 主要是修改下面这 3 行参数：
-    cmd.arg("--dump-single-json") // 修复点1: 强制将多行合集数据合并为单一 JSON 字典
+    cmd.arg("--dump-single-json") 
         .arg("--flat-playlist")
-        .arg("--no-warnings")      // 修复点2: 屏蔽不必要的控制台警告，防止污染标准输出流
+        .arg("--no-warnings")      
         .arg(url);
 
     // 挂载：使用本地浏览器 Cookie 绕过限制
@@ -168,6 +167,15 @@ pub async fn download_via_ytdlp(app: AppHandle, state: AppState, task: &Task) ->
             .arg("--embed-thumbnail");
     } else {
         cmd.arg("-P").arg(save_dir);
+    }
+
+    // --- 【修改】新特性 4: 挂载嗅探器捕获的防盗链 Headers ---
+    if let Some(ref headers_json) = task.http_headers {
+        if let Ok(parsed_headers) = serde_json::from_str::<std::collections::HashMap<String, String>>(headers_json) {
+            for (key, value) in parsed_headers {
+                cmd.arg("--add-header").arg(format!("{}: {}", key, value));
+            }
+        }
     }
 
     // 基础配置
