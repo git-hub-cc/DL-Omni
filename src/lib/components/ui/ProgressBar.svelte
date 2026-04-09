@@ -4,13 +4,15 @@
     speedText = "",  // 如 "15.2 MB/s"
     etaText = "",    // 如 "00:15"
     sizeText = "",   // 如 "105 MB / 1.2 GB"
-    status = "downloading" // 控制进度条颜色
+    status = "downloading", 
+    errorMsg = undefined // 接收后端传递的错误原因
   } = $props<{
     progress: number;
     speedText?: string;
     etaText?: string;
     sizeText?: string;
     status?: import('$lib/types').TaskStatus;
+    errorMsg?: string;
   }>();
 
   // 根据状态派生出不同的底色类名
@@ -30,15 +32,21 @@
   ></div>
 
   <div class="absolute inset-0 flex items-center justify-between px-2 text-[11px] font-mono text-zinc-100 drop-shadow-md z-10 pointer-events-none tracking-wide">
-    <div class="flex items-center space-x-3">
-      <span>{speedText}</span>
-      {#if etaText}
-        <span class="text-zinc-300">ETA: {etaText}</span>
-      {/if}
-    </div>
-    <div class="text-right">
-      <span>{sizeText}</span>
-      <span class="ml-1 opacity-80">({(progress * 100).toFixed(1)}%)</span>
-    </div>
+    {#if status === 'error'}
+      <div class="w-full text-center sm:text-left text-red-50 font-medium truncate drop-shadow-lg px-1">
+        ⚠️ {errorMsg || "下载发生异常，请重试"}
+      </div>
+    {:else}
+      <div class="flex items-center space-x-3">
+        <span>{speedText}</span>
+        {#if etaText}
+          <span class="text-zinc-300">ETA: {etaText}</span>
+        {/if}
+      </div>
+      <div class="text-right">
+        <span>{sizeText}</span>
+        <span class="ml-1 opacity-80">({(progress * 100).toFixed(1)}%)</span>
+      </div>
+    {/if}
   </div>
 </div>

@@ -20,7 +20,7 @@
   let showPlaylistModal = $state(false);
   let selectedItems = $state<Set<number>>(new Set());
 
-  // 【新增】合集选择弹窗的分页逻辑与状态
+  // 合集选择弹窗的分页逻辑与状态
   let currentPage = $state(1);
   const pageSize = 10;
 
@@ -48,11 +48,9 @@
   async function handleParse() {
     if (!inputUrl) return;
     
-    // 调用智能批量提取工具
     const urls = extractUrls(inputUrl);
 
     if (urls.length === 0) {
-      // 若正则未匹配到，尝试作为单个域名兜底补全
       const singleUrl = formatUrl(inputUrl);
       if (singleUrl) {
         urls.push(singleUrl);
@@ -65,7 +63,6 @@
     parseError = '';
     isParsing = true;
 
-    // 分支 1：批量解析模式
     if (urls.length > 1) {
       showNewTaskModal = false;
       taskStore.submitBatchTasks(urls, undefined);
@@ -74,7 +71,6 @@
       return;
     }
     
-    // 分支 2：单链接解析模式（保留原有合集弹窗逻辑）
     const finalUrl = urls[0];
     try {
       const info = await IPC.parseUrl(finalUrl);
@@ -82,7 +78,6 @@
       
       if (info.playlist_entries && info.playlist_entries.length > 1) {
         showNewTaskModal = false;
-        // 初始化全部选中
         selectedItems = new Set(info.playlist_entries.map((e, i) => getEntryId(e, i)));
         currentPage = 1;
         showPlaylistModal = true;
@@ -93,7 +88,6 @@
         inputUrl = '';
       }
     } catch (e: any) {
-      // 常规解析失败时，取消强制入队，直接带参数跳转到嗅探页面
       console.warn('常规解析失败，引导跳转至嗅探页面:', e);
       showNewTaskModal = false;
       goto(`/sniffer?url=${encodeURIComponent(finalUrl)}`);
@@ -121,52 +115,42 @@
 
   function toggleSelectAll() {
     if (!parsedInfo?.playlist_entries) return;
-    
     const allIds = parsedInfo.playlist_entries.map((e, i) => getEntryId(e, i));
-    
-    // 严格反选逻辑：对所有项目进行状态翻转
     allIds.forEach(id => {
-      if (selectedItems.has(id)) {
-        selectedItems.delete(id);
-      } else {
-        selectedItems.add(id);
-      }
+      if (selectedItems.has(id)) { selectedItems.delete(id); } 
+      else { selectedItems.add(id); }
     });
-    selectedItems = new Set(selectedItems); // 触发响应式更新并修复之前 clear() 不触发更新的问题
+    selectedItems = new Set(selectedItems); 
   }
 
   function toggleSelectCurrentPage() {
     if (!parsedInfo?.playlist_entries) return;
-    
     const currentIds = paginatedEntries.map((e, i) => {
         const globalIndex = (currentPage - 1) * pageSize + i;
         return getEntryId(e, globalIndex);
     });
-    
-    // 严格反选逻辑：仅对当前页项目进行状态翻转
     currentIds.forEach(id => {
-        if (selectedItems.has(id)) {
-            selectedItems.delete(id);
-        } else {
-            selectedItems.add(id);
-        }
+        if (selectedItems.has(id)) { selectedItems.delete(id); } 
+        else { selectedItems.add(id); }
     });
-    selectedItems = new Set(selectedItems); // 触发响应式更新
+    selectedItems = new Set(selectedItems);
   }
 
   function toggleItem(idx: number) {
-    if (selectedItems.has(idx)) {
-      selectedItems.delete(idx);
-    } else {
-      selectedItems.add(idx);
-    }
+    if (selectedItems.has(idx)) { selectedItems.delete(idx); } 
+    else { selectedItems.add(idx); }
     selectedItems = new Set(selectedItems);
   }
 
   async function handleToggleTask(taskId: string, status: string) {
     try {
       if (status === 'paused' || status === 'error') {
-        taskStore.update(taskId, { status: 'pending' });
+        // 【核心修改】如果是错误状态，先在前端重置进度条和错误文本，提供极速交互反馈
+        if (status === 'error') {
+          taskStore.resetTaskStateForRetry(taskId);
+        } else {
+          taskStore.update(taskId, { status: 'pending' });
+        }
         await IPC.resumeTask(taskId);
       } else {
         taskStore.update(taskId, { status: 'paused' });
@@ -199,7 +183,7 @@
       {#each [
         { id: 'all', label: '全部任务' },
         { id: 'active', label: '下载中' },
-        { id: 'pausedOrError', label: '已暂停/错误' }
+        { id: 'pausedOrError', label: '已暂停/异常' }
       ] as tab}
         <button
           class="px-4 py-1.5 text-xs font-medium rounded-md transition-colors {activeTab === tab.id ? 'bg-zinc-700 text-zinc-100 shadow-sm' : 'text-zinc-400 hover:text-zinc-200'}"
@@ -227,7 +211,7 @@
       </div>
     {:else}
       {#each displayTasks as task (task.id)}
-        <div class="group flex items-center p-3 bg-zinc-800/20 hover:bg-zinc-800/50 border border-zinc-800 rounded-xl transition-colors">
+        <div class="group flex items-center p-3 {task.status === 'error' ? 'bg-red-500/5 hover:bg-red-500/10 border-red-500/30' : 'bg-zinc-800/20 hover:bg-zinc-800/50 border-zinc-800'} border rounded-xl transition-colors">
           <div class="w-20 h-14 shrink-0 bg-zinc-800 rounded-md overflow-hidden mr-4 relative">
             {#if task.thumbnail}
               <img src={task.thumbnail.replace('http://', 'https://')} alt="cover" class="w-full h-full object-cover" />
@@ -256,25 +240,28 @@
           </div>
 
           <div class="flex-1 min-w-0 pr-4">
-            <h4 class="text-sm font-medium text-zinc-200 truncate mb-2">{task.title}</h4>
+            <h4 class="text-sm font-medium {task.status === 'error' ? 'text-red-300' : 'text-zinc-200'} truncate mb-2">{task.title}</h4>
             <ProgressBar
               progress={task.total_bytes > 0 ? task.downloaded_bytes / task.total_bytes : task.downloaded_bytes / 100}
               speedText={task.speed > 0 ? (task.speed / 1024 / 1024).toFixed(2) + " MB/s" : (task.status === 'downloading' ? "测速中..." : "")}
               etaText={task.eta > 0 ? task.eta + "s" : ""}
               sizeText={task.total_bytes > 0 ? (task.total_bytes / 1024 / 1024).toFixed(1) + " MB" : ""}
               status={task.status}
+              errorMsg={task.error_msg}
             />
           </div>
 
           <div class="shrink-0 flex items-center space-x-2 opacity-0 group-hover:opacity-100 transition-opacity">
             {#if task.status !== 'completed'}
               <button
-                class="w-8 h-8 flex items-center justify-center rounded-full bg-zinc-700/50 hover:bg-zinc-600 text-zinc-300"
-                aria-label="暂停或恢复任务"
-                title="暂停 / 恢复"
+                class="w-8 h-8 flex items-center justify-center rounded-full bg-zinc-700/50 hover:bg-zinc-600 text-zinc-300 transition-colors"
+                aria-label={task.status === 'error' ? '重试任务' : '暂停或恢复任务'}
+                title={task.status === 'error' ? '重试任务' : '暂停 / 恢复'}
                 onclick={() => handleToggleTask(task.id, task.status)}
               >
-                {#if task.status === 'paused' || task.status === 'error'}
+                {#if task.status === 'error'}
+                  <svg class="w-4 h-4 text-red-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+                {:else if task.status === 'paused'}
                   <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
                 {:else}
                   <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 9v6m4-6v6m7-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
@@ -282,7 +269,7 @@
               </button>
             {/if}
             <button
-              class="w-8 h-8 flex items-center justify-center rounded-full bg-zinc-700/50 hover:bg-red-500/80 text-zinc-300 hover:text-white"
+              class="w-8 h-8 flex items-center justify-center rounded-full bg-zinc-700/50 hover:bg-red-500/80 text-zinc-300 hover:text-white transition-colors"
               aria-label="删除任务"
               title="删除任务"
               onclick={() => handleDeleteTask(task.id)}

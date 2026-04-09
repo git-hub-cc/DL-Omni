@@ -123,10 +123,10 @@ pub struct Config {
     pub split_audio_video: bool,
     pub video_quality: String,
     pub audio_quality: String,
-    pub use_cookie: bool,          // 修改：是否使用内置浏览器的 Cookie
+    pub use_cookie: bool,
     pub include_metadata: bool,
-    pub naming_template: String,   // 新增：命名的自定义占位符模板
-    pub sniff_blacklist: String,   // 新增：嗅探器的自定义正则过滤黑名单
+    pub naming_template: String,
+    pub sniff_blacklist: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -134,8 +134,27 @@ pub struct SniffedResource {
     pub url: String,
     pub r#type: String, 
     pub filename: String,
-    pub page_title: Option<String>,     // 新增：抓取时的网页 Title
-    pub original_name: Option<String>,  // 新增：推断的 URL 文件名
-    pub ext: Option<String>,            // 新增：推断的扩展名
+    pub page_title: Option<String>,
+    pub original_name: Option<String>,
+    pub ext: Option<String>,
     pub headers: Option<std::collections::HashMap<String, String>>, 
+}
+
+// ================= 新增：断点续传状态持久化模型 =================
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ChunkState {
+    pub id: usize,
+    pub start: u64,
+    pub end: u64,
+    pub current_offset: u64,
+    pub is_completed: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct TaskStateFile {
+    pub task_id: String,
+    pub total_bytes: u64,
+    pub file_name: String,
+    pub chunks: Vec<ChunkState>,
 }

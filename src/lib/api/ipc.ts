@@ -1,5 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
-import type { MediaInfo, Task, SniffedResource } from '$lib/types';
+import type { MediaInfo, Task, SniffedResource, TaskProgressUpdate, TaskErrorPayload } from '$lib/types';
 import { taskStore } from '$lib/stores/tasks.svelte';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 
@@ -16,7 +16,6 @@ export const IPC = {
     playlistItems?: string,
     httpHeaders?: string 
   ): Promise<string> {
-    // 【规范对齐】显式使用 snake_case 键名，严格匹配后端 #[command(rename_all = "snake_case")]
     return await invoke<string>('create_task', { 
       url, 
       title, 
@@ -28,12 +27,10 @@ export const IPC = {
   },
 
   async pauseTask(taskId: string): Promise<void> {
-    // 【规范对齐】严格匹配后端参数 task_id
     await invoke('pause_task', { task_id: taskId });
   },
 
   async resumeTask(taskId: string): Promise<void> {
-    // 【规范对齐】严格匹配后端参数 task_id
     await invoke('resume_task', { task_id: taskId });
   },
 
@@ -42,7 +39,6 @@ export const IPC = {
   },
 
   async cancelTask(taskId: string): Promise<void> {
-    // 【规范对齐】严格匹配后端参数 task_id
     await invoke('cancel_task', { task_id: taskId });
   },
 
@@ -63,21 +59,29 @@ export const IPC = {
   },
 
   async listenProgressUpdates(): Promise<UnlistenFn> {
-    return await listen<Partial<Task>[]>('batch_progress_update', (event) => {
-      taskStore.batchUpdateProgress(event.payload);
+    return await listen<TaskProgressUpdate[]>('batch_progress_update', (event) => {
+      // 防御性判断，防止后端在高并发下抛出空数据导致前端渲染白屏
+      if (event.payload && Array.isArray(event.payload)) {
+        taskStore.batchUpdateProgress(event.payload);
+      }
     });
   },
 
   async listenTaskError(): Promise<UnlistenFn> {
-    return await listen<{ id: string, error: string }>('task_error', (event) => {
-      const { id, error } = event.payload;
-      taskStore.update(id, { status: 'error', error_msg: error });
+    return await listen<TaskErrorPayload>('task_error', (event) => {
+      // 严格判空清洗
+      if (event.payload && event.payload.id && event.payload.error) {
+        const { id, error } = event.payload;
+        taskStore.update(id, { status: 'error', error_msg: error });
+      }
     });
   },
 
   async listenSniffedResources(callback: (resource: SniffedResource) => void): Promise<UnlistenFn> {
     return await listen<SniffedResource>('sniffed_resource', (event) => {
-      callback(event.payload);
+      if (event.payload && event.payload.url) {
+        callback(event.payload);
+      }
     });
   }
 };

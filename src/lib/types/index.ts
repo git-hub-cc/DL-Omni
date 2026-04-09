@@ -20,16 +20,34 @@ export interface Task {
   status: TaskStatus;        // 当前状态
   format_id: string;         // 用户选择的 yt-dlp format_id
   playlist_items?: string;   // 合集下载范围 (如 "1,3,5-7")
-  
-  // 【重要】绑定的自定义 HTTP 请求头 (JSON 字符串格式)。
-  http_headers?: string;     
+  http_headers?: string;     // 绑定的自定义 HTTP 请求头 (JSON 字符串格式)
 
   total_bytes: number;       // 文件总大小 (字节)
   downloaded_bytes: number;  // 已下载大小 (字节)
   speed: number;             // 当前下载速度 (Bytes/s)
   eta: number;               // 预估剩余时间 (秒)
   created_at: number;        // 任务创建时间戳
-  error_msg?: string;        // 错误状态下的简明提示
+  error_msg?: string;        // 后端抛出的具体错误信息
+}
+
+/**
+ * 后端推送的批量进度载荷
+ */
+export interface TaskProgressUpdate {
+  id: string;
+  downloaded_bytes: number;
+  total_bytes: number;
+  speed: number;
+  eta: number;
+  status: TaskStatus;
+}
+
+/**
+ * 后端推送的错误载荷
+ */
+export interface TaskErrorPayload {
+  id: string;
+  error: string;
 }
 
 /**
@@ -45,10 +63,10 @@ export interface Config {
   split_audio_video: boolean;  
   video_quality: string;       
   audio_quality: string;       
-  use_cookie: boolean;         // 修改：是否使用内置浏览器的 Cookie
+  use_cookie: boolean;         
   include_metadata: boolean;
-  naming_template: string;     // 新增：标题命名模板配置
-  sniff_blacklist: string;     // 新增：嗅探黑名单正则表达式
+  naming_template: string;     
+  sniff_blacklist: string;     
 }
 
 /**
@@ -92,12 +110,10 @@ export interface MediaInfo {
  */
 export interface SniffedResource {
   url: string;
-  type: string;             // 如 "video", "media (octet-stream)" 等
-  filename: string;         // Fallback 旧字段
-  page_title?: string;      // 网页抓取的 Meta Title
-  original_name?: string;   // URL 分割推断名
-  ext?: string;             // 扩展名后缀
-  
-  // 动态提取的请求头集合
+  type: string;             
+  filename: string;         
+  page_title?: string;      
+  original_name?: string;   
+  ext?: string;             
   headers?: Record<string, string>; 
 }

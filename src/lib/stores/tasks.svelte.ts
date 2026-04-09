@@ -1,4 +1,4 @@
-import type { Task, MediaInfo, SniffedResource } from '$lib/types';
+import type { Task, MediaInfo, SniffedResource, TaskProgressUpdate } from '$lib/types';
 import { IPC } from '$lib/api/ipc';
 import { configStore } from '$lib/stores/config.svelte';
 
@@ -41,10 +41,40 @@ class TaskStore {
     }
   }
 
-  batchUpdateProgress(updates: Partial<Task>[]) {
+  /**
+   * 恢复任务状态前的清理动作，防止重试时 UI 残留错误红字
+   */
+  resetTaskStateForRetry(id: string) {
+    if (this.tasks[id]) {
+      this.tasks[id] = { 
+        ...this.tasks[id], 
+        status: 'pending', 
+        error_msg: undefined, 
+        speed: 0, 
+        eta: 0 
+      };
+    }
+  }
+
+  /**
+   * 批量更新进度，并在完成时强制对齐字节数，提供完美的 UI 收尾体验
+   */
+  batchUpdateProgress(updates: TaskProgressUpdate[]) {
     for (const update of updates) {
-      if (update.id) {
-        this.update(update.id, update);
+      if (update.id && this.tasks[update.id]) {
+        let finalDownloaded = update.downloaded_bytes;
+        // 如果状态变更为完成，且总大小存在，强制将已下载大小对齐，防止因最后一次汇报不准导致进度条卡在 99%
+        if (update.status === 'completed' && update.total_bytes > 0) {
+          finalDownloaded = update.total_bytes;
+        }
+
+        this.update(update.id, {
+          downloaded_bytes: finalDownloaded,
+          total_bytes: update.total_bytes,
+          speed: update.speed,
+          eta: update.eta,
+          status: update.status
+        });
       }
     }
   }
@@ -55,14 +85,12 @@ class TaskStore {
 
   /**
    * 仿猫抓模板解析引擎
-   * 支持占位符: [title] 网页标题, [name] 原始名, [ext] 扩展名, [time] 时间戳
    */
   parseTemplate(resource: SniffedResource): string {
     const template = configStore.settings.naming_template || '[title] - [name].[ext]';
     const now = new Date();
     const timestamp = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}`;
     
-    // [修改点] 拦截无效后缀，防止前端死板拼接生成 unknown.unknown
     const isUnknownExt = !resource.ext || resource.ext === 'unknown';
     
     let result = template
@@ -71,13 +99,11 @@ class TaskStore {
       .replace('[time]', timestamp);
 
     if (isUnknownExt) {
-        // 如果后缀完全未知，剥离模板中显式的 .[ext]，将格式推断压力转移给后端的 HTTP Headers 拦截
         result = result.replace('.[ext]', '').replace('[ext]', '');
     } else {
         result = result.replace('[ext]', resource.ext as string);
     }
 
-    // 基础清洗：防止模板配置错误导致文件名包含非法字符
     return result.replace(/[\\/:*?"<>|]/g, '_').trim();
   }
 
@@ -167,21 +193,14 @@ class TaskStore {
     }
   }
 
-  /**
-   * 批量提交任务（串行解析，最小化后端入侵并防止并发拥堵）
-   */
   async submitBatchTasks(urls: string[], httpHeaders?: string) {
-    // 1. 立即在界面上生成所有排队中的占位任务，提供快速 UI 响应
     const pendingItems = urls.map(url => {
       const tempId = this.createTempTask(url, "排队解析中...", httpHeaders);
       return { url, tempId };
     });
 
-    // 2. 前端控制的串行解析队列
     for (const item of pendingItems) {
-      // 检查任务是否在排队过程中被用户手动移除
       if (!this.tasks[item.tempId]) continue;
-
       this.update(item.tempId, { title: "解析/处理中..." });
       try {
         const info = await IPC.parseUrl(item.url);
@@ -194,8 +213,6 @@ class TaskStore {
 
   async submitSniffedTask(resource: SniffedResource) {
     const headersStr = resource.headers ? JSON.stringify(resource.headers) : undefined;
-    
-    // 使用模板引擎生成良好的标题名
     const finalTitle = this.parseTemplate(resource);
     const tempId = this.createTempTask(resource.url, finalTitle, headersStr);
     

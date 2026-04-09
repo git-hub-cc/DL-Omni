@@ -13,6 +13,15 @@ use state::AppState;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // 初始化日志系统，默认输出 INFO 级别及以上日志，方便追踪网络抖动与分片状态
+    tracing_subscriber::fmt()
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env().add_directive(tracing::Level::INFO.into()))
+        .with_target(false)
+        .with_thread_ids(true)
+        .init();
+
+    tracing::info!("DL-Omni Backend Starting...");
+
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_shell::init())
@@ -60,7 +69,7 @@ pub fn run() {
             commands::update_config,
             commands::get_config,
             commands::start_sniffing,
-            commands::stop_sniffing // 【修复】在此处注册缺失的销毁指令
+            commands::stop_sniffing
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
