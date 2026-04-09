@@ -5,7 +5,9 @@
   import { taskStore } from '$lib/stores/tasks.svelte';
   import { configStore } from '$lib/stores/config.svelte';
   import { goto } from '$app/navigation';
+  import { formatUrl } from '$lib/utils/url';
   import type { SniffedResource } from '$lib/types';
+  import { page } from '$app/stores';
 
   let url = $state('https://www.douyin.com/jingxuan');
   let capturedResources = $state<SniffedResource[]>([]);
@@ -20,6 +22,12 @@
   ];
 
   onMount(async () => {
+    // 检查是否从主页抛出了异常链接，若有，自动填入输入框引导嗅探
+    const queryUrl = $page.url.searchParams.get('url');
+    if (queryUrl) {
+      url = queryUrl;
+    }
+
     unlisten = await IPC.listenSniffedResources((resource: SniffedResource) => {
       // 增加前端动态正则黑名单过滤
       const blacklist = configStore.settings.sniff_blacklist;
@@ -40,6 +48,10 @@
 
   async function start() {
     if (!url) return;
+    
+    // 调用智能补全 URL 工具
+    url = formatUrl(url);
+    
     isSniffing = true;
     capturedResources = [];
     showDrawer = false;
@@ -74,7 +86,7 @@
       <input
         type="text"
         bind:value={url}
-        placeholder="输入流媒体网页地址 (回车开始嗅探)"
+        placeholder="输入流媒体网页地址 (回车开始嗅探，可直接输入 baidu.com)"
         class="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-4 py-2 text-sm text-zinc-200 outline-none focus:border-accent-blue transition-colors"
         onkeydown={(e) => e.key === 'Enter' && start()}
       />

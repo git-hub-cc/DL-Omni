@@ -2,9 +2,11 @@
   import { taskStore } from '$lib/stores/tasks.svelte';
   import { configStore } from '$lib/stores/config.svelte';
   import { IPC } from '$lib/api/ipc';
+  import { formatUrl } from '$lib/utils/url';
   import ProgressBar from '$lib/components/ui/ProgressBar.svelte';
   import Modal from '$lib/components/ui/Modal.svelte';
   import type { MediaInfo } from '$lib/types';
+  import { goto } from '$app/navigation';
 
   let activeTab = $state<'all' | 'active' | 'pausedOrError'>('all');
   let showNewTaskModal = $state(false);
@@ -45,6 +47,10 @@
 
   async function handleParse() {
     if (!inputUrl) return;
+    
+    // 调用智能补全 URL 工具
+    inputUrl = formatUrl(inputUrl);
+    
     parseError = '';
     isParsing = true;
     
@@ -60,27 +66,15 @@
         showPlaylistModal = true;
       } else {
         showNewTaskModal = false;
-        // 【修复】传入占位符字符串而不是 undefined，避免后端解析 json 时缺失 title 字段
         const tempId = taskStore.createTempTask(inputUrl, "解析/处理中...");
         await taskStore.commitTask(tempId, inputUrl, info, undefined, undefined);
         inputUrl = '';
       }
     } catch (e: any) {
-      // 前端兜底机制，无论解析报什么错，都强制把任务入队
-      console.warn('常规解析失败，触发强制兜底入队机制:', e);
+      // 常规解析失败时，取消强制入队，直接带参数跳转到嗅探页面
+      console.warn('常规解析失败，引导跳转至嗅探页面:', e);
       showNewTaskModal = false;
-      // 【修复】传入占位符字符串而不是 undefined
-      const tempId = taskStore.createTempTask(inputUrl, "解析/处理中...");
-      
-      const fallbackInfo: MediaInfo = {
-        id: 'force_fallback',
-        title: '未知媒体任务 (强制解析入队)',
-        duration: 0,
-        thumbnail: '',
-        formats: []
-      };
-      
-      await taskStore.commitTask(tempId, inputUrl, fallbackInfo, undefined, undefined);
+      goto(`/sniffer?url=${encodeURIComponent(inputUrl)}`);
       inputUrl = '';
     } finally {
       isParsing = false;
@@ -94,7 +88,6 @@
     const playlistItemsStr = itemsArray.join(',');
     
     showPlaylistModal = false;
-    // 【修复】传入占位符字符串而不是 undefined
     const tempId = taskStore.createTempTask(inputUrl, "解析/处理中...");
     await taskStore.commitTask(tempId, inputUrl, parsedInfo, playlistItemsStr, undefined);
     
@@ -299,7 +292,7 @@
         </div>
       {/if}
       <div class="text-[11px] text-zinc-500">
-        💡 提示：可在“全局设置”中开启使用内置 Cookie 解析，以突破 1080P 或高画质会员限制。若直接解析失败或遭遇防盗链，请尝试左侧菜单栏的“嗅探”功能。
+        💡 提示：可在“全局设置”中开启使用内置 Cookie 解析，以突破 1080P 或高画质会员限制。若直接解析失败或遭遇防盗链，将自动跳转至“嗅探”功能。
       </div>
     </div>
   </Modal>
