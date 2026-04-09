@@ -51,7 +51,37 @@ pub fn extract_filename_from_url(url: &str) -> String {
     "unknown_file".to_string()
 }
 
-/// [新增] 检查给定的 URL 是否为 m3u8 媒体流索引文件
+/// [新增] 从 Content-Disposition 请求头中解析真实文件名
+pub fn parse_filename_from_header(header_val: &str) -> Option<String> {
+    let re = Regex::new(r#"filename\s*=\s*(?:"([^"]+)"|([^;]+))"#).unwrap();
+    if let Some(caps) = re.captures(header_val) {
+        if let Some(m) = caps.get(1).or(caps.get(2)) {
+            return Some(m.as_str().to_string());
+        }
+    }
+    None
+}
+
+/// [新增] 从 Content-Type (MIME) 推断文件后缀名
+pub fn get_extension_from_mime(mime: &str) -> Option<&'static str> {
+    let mime = mime.split(';').next().unwrap_or(mime).trim().to_lowercase();
+    match mime.as_str() {
+        "video/mp4" => Some("mp4"),
+        "video/x-flv" => Some("flv"),
+        "video/x-matroska" => Some("mkv"),
+        "video/webm" => Some("webm"),
+        "video/quicktime" => Some("mov"),
+        "audio/mpeg" => Some("mp3"),
+        "audio/mp4" => Some("m4a"),
+        "audio/x-m4a" => Some("m4a"),
+        "application/x-mpegurl" | "application/vnd.apple.mpegurl" => Some("m3u8"),
+        "application/dash+xml" => Some("mpd"),
+        "application/octet-stream" => None, // 交由后续逻辑处理
+        _ => None,
+    }
+}
+
+/// 检查给定的 URL 是否为 m3u8 媒体流索引文件
 pub fn is_m3u8_link(url: &str) -> bool {
     let clean_url = url.split('?').next().unwrap_or(url).to_lowercase();
     clean_url.ends_with(".m3u8")

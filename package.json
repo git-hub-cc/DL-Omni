@@ -1,6 +1,6 @@
 {
   "name": "dl-omni",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "",
   "type": "module",
   "scripts": {
@@ -10,8 +10,8 @@
     "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
     "check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
     "tauri": "tauri",
-    "tauri dev": "npm run tauri dev",
-    "tauri build": "npm run tauri build"
+    "tauri dev": "tauri dev",
+    "tauri build": "tauri build"
   },
   "license": "MIT",
   "dependencies": {

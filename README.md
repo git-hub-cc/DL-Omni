@@ -12,14 +12,14 @@
 ## ✨ 核心特性
 
 -   **🎯 精准链接下载**：支持 Bilibili、YouTube、TikTok 等全球数百个主流流媒体平台的链接解析与下载。
--   **🔍 内置浏览器嗅探**：提供独立的 Webview 容器，自动拦截网页中的 `.m3u8`、`.mp4` 等媒体流地址，解决复杂网页资源提取难题。
+-   **🔍 猫抓级高级嗅探**：提供独立的 Webview 容器，基于多路底层拦截自动提取 `.m3u8`、`.mp4` 等媒体流地址；支持自定义命名模板与正则黑名单过滤。
 -   **⚡ 高性能下载引擎**：
     -   **双轨制调度**：智能切换 `yt-dlp` 托管下载与 Rust 原生多线程直链下载。
     -   **并发控制**：支持自定义最大同时下载任务数及单任务分片线程数。
 -   **🛡️ 鲁棒性设计**：
     -   **断点续传**：基于 SQLite 数据库的任务持久化，支持应用崩溃后的进度恢复。
     -   **磁盘预警**：在下载前自动检查目标磁盘空间，防止写入失败。
--   **🔄 引擎热更新**：无需更新整个应用，即可通过 GitHub API 自动检测并替换最新的 `yt-dlp` 核心二进制文件。
+-   **🔄 引擎自动更新**：无需更新整个应用，即可通过 GitHub API 自动检测并下载最新的 `yt-dlp` 解析核心与 `FFmpeg` 合并引擎。
 -   **🎨 极简美学 UI**：采用 Svelte 5 Runes 实现细粒度响应式更新，配合 Tailwind CSS v4 构建的高级感深色模式界面。
 
 ---
@@ -28,7 +28,7 @@
 
 -   **前端 (Frontend)**: [Svelte 5](https://svelte.dev/) (Runes), TypeScript, [Tailwind CSS v4](https://tailwindcss.com/)
 -   **后端 (Backend)**: [Tauri 2](https://v2.tauri.app/), [Rust](https://www.rust-lang.org/)
--   **解析引擎**: [yt-dlp](https://github.com/yt-dlp/yt-dlp)
+-   **解析引擎**: [yt-dlp](https://github.com/yt-dlp/yt-dlp), [FFmpeg](https://ffmpeg.org/)
 -   **数据库**: [SQLite](https://www.sqlite.org/) (通过 `rusqlite` 实现任务持久化)
 -   **进程通信**: Tauri IPC (Commands & Events)
 
@@ -62,10 +62,6 @@ npm install
 ### 3. 启动开发模式
 开发模式下，Tauri 会自动启动 Rust 后端服务并打开应用窗口：
 ```bash
-npm run start
-```
-或者手动运行：
-```bash
 npm run tauri dev
 ```
 
@@ -81,7 +77,7 @@ npm run build
 npm run tauri build
 ```
 
-> **注意**：首次打包或运行预览版时，Rust 后端会自动从 GitHub 下载最新的 `yt-dlp` 二进制文件并存放于应用的 `AppData/bin` 目录。
+> **注意**：首次打包或运行预览版时，Rust 后端会自动从 GitHub 下载最新的 `yt-dlp` 及 `FFmpeg` 二进制文件并存放于应用的 `AppData/bin` 目录。
 
 ---
 
@@ -97,7 +93,7 @@ npm run tauri build
 │   └── routes/           # 页面路由 (任务、嗅探、设置、历史)
 ├── src-tauri/            # 后端源码 (Rust)
 │   ├── src/
-│   │   ├── engine/       # 下载逻辑 (yt-dlp 封装, 嗅探脚本注入)
+│   │   ├── engine/       # 下载逻辑 (yt-dlp 封装, FFmpeg管理, 嗅探脚本注入)
 │   │   ├── commands.rs   # 前端调用接口映射
 │   │   ├── database.rs   # SQLite 任务管理
 │   │   ├── config.rs     # 配置文件持久化
@@ -110,8 +106,8 @@ npm run tauri build
 
 ## 🛠️ 常见问题
 
--   **无法解析 1080P/4K 视频？**
-    请在“设置”中勾选“包含音频”，并确保已正确配置浏览器 Cookie（通过 `yt-dlp` 自动读取）。
+-   **无法解析 1080P/4K 视频 / 需要会员权限？**
+    请在“全局设置”中开启“使用内置浏览器 Cookie”，并先前往左侧“嗅探”页面访问目标网站完成登录（内置引擎会自动同步您的登录状态）。
 -   **嗅探器无法捕获链接？**
     请确保在弹出的嗅探窗口中实际点击了播放按钮，部分网站需要开始缓冲后才会触发媒体流请求。
 -   **更新核心失败？**

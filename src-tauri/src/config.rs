@@ -16,8 +16,6 @@ impl ConfigManager {
 
         let config_path = app_dir.join("config.json");
 
-        // 如果配置文件存在，则读取并反序列化；否则生成默认配置
-        // 若存在旧配置文件缺失新增的字段，反序列化会自动 fallback 到 default_config 兜底填充
         let settings = if config_path.exists() {
             let content = fs::read_to_string(&config_path).map_err(|e| e.to_string())?;
             serde_json::from_str(&content).unwrap_or_else(|_| Self::default_config(app))
@@ -25,7 +23,6 @@ impl ConfigManager {
             Self::default_config(app)
         };
 
-        // 重新写回配置，确保向旧用户补充缺少的字段 (如 browser_cookie 等)
         let content = serde_json::to_string_pretty(&settings).unwrap();
         let _ = fs::write(&config_path, content);
 
@@ -53,8 +50,11 @@ impl ConfigManager {
             split_audio_video: false,
             video_quality: String::from("best"),
             audio_quality: String::from("best"),
-            browser_cookie: None,    // 新增默认：不使用浏览器 Cookie
-            include_metadata: false, // 新增默认：关闭元数据归档
+            use_cookie: false, // 修改：默认关闭内置浏览器 Cookie
+            include_metadata: false,
+            // 补全缺失的字段，确保与 models::Config 结构一致
+            naming_template: String::from("[title] - [name].[ext]"),
+            sniff_blacklist: String::from("google-analytics|doubleclick\\.net|\\.log$|\\.health$"),
         }
     }
 

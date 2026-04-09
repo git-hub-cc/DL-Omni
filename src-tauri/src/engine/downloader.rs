@@ -39,7 +39,7 @@ pub async fn download_native(_app: AppHandle, state: AppState, task: &Task) -> R
         if let Ok(parsed_headers) = serde_json::from_str::<std::collections::HashMap<String, String>>(headers_json) {
             for (k, v) in parsed_headers {
                 let clean_v = v.replace('\n', "").replace('\r', "");
-                // 【修复】使用 from_bytes 包容 Cookie 里的非标字符，防止转换崩溃
+                // 使用 from_bytes 包容 Cookie 里的非标字符，防止转换崩溃
                 if let (Ok(name), Ok(value)) = (HeaderName::from_str(&k), HeaderValue::from_bytes(clean_v.as_bytes())) {
                     headers.insert(name, value);
                 }
@@ -55,11 +55,26 @@ pub async fn download_native(_app: AppHandle, state: AppState, task: &Task) -> R
         .map_err(|e| e.to_string())?;
 
     let mut total_size = 0;
+    let mut real_filename: Option<String> = None;
+    let mut real_ext: Option<String> = None;
 
+    // 发起 HEAD 请求获取元数据
     if let Ok(res) = client.head(&task.url).send().await {
         total_size = res.content_length().unwrap_or(0);
+        
+        // 尝试从 Content-Disposition 提取真实文件名
+        if let Some(cd) = res.headers().get(reqwest::header::CONTENT_DISPOSITION).and_then(|v| v.to_str().ok()) {
+            real_filename = utils::parse_filename_from_header(cd);
+        }
+        // 尝试从 Content-Type 提取真实后缀
+        if let Some(ct) = res.headers().get(reqwest::header::CONTENT_TYPE).and_then(|v| v.to_str().ok()) {
+            if let Some(ext) = utils::get_extension_from_mime(ct) {
+                real_ext = Some(ext.to_string());
+            }
+        }
     }
 
+    // 如果 HEAD 不支持，使用 GET byte=0-0 降级获取
     if total_size == 0 {
         if let Ok(res) = client.get(&task.url).header("Range", "bytes=0-0").send().await {
             if let Some(cr) = res.headers().get(reqwest::header::CONTENT_RANGE) {
@@ -71,6 +86,19 @@ pub async fn download_native(_app: AppHandle, state: AppState, task: &Task) -> R
             }
             if total_size == 0 {
                 total_size = res.content_length().unwrap_or(0);
+            }
+
+            if real_filename.is_none() {
+                if let Some(cd) = res.headers().get(reqwest::header::CONTENT_DISPOSITION).and_then(|v| v.to_str().ok()) {
+                    real_filename = utils::parse_filename_from_header(cd);
+                }
+            }
+            if real_ext.is_none() {
+                if let Some(ct) = res.headers().get(reqwest::header::CONTENT_TYPE).and_then(|v| v.to_str().ok()) {
+                    if let Some(ext) = utils::get_extension_from_mime(ct) {
+                        real_ext = Some(ext.to_string());
+                    }
+                }
             }
         }
     }
@@ -91,13 +119,41 @@ pub async fn download_native(_app: AppHandle, state: AppState, task: &Task) -> R
 
     std::fs::create_dir_all(&save_dir).map_err(|e| e.to_string())?;
 
-    let filename = if task.title.is_empty() || task.title == "unknown_file" || task.title.starts_with("嗅探资源") {
-        utils::extract_filename_from_url(&task.url)
-    } else {
-        task.title.clone()
-    };
+    // ================= 文件名终极修复逻辑 =================
+    let mut base_name = task.title.clone();
+    if base_name.is_empty() || base_name == "unknown_file" || base_name.starts_with("嗅探资源") {
+        base_name = utils::extract_filename_from_url(&task.url);
+    }
     
-    let final_filename = if !filename.contains('.') { format!("{}.mp4", filename) } else { filename };
+    // 清洗由于前端模板造成的畸形 unknown 后缀
+    base_name = base_name.replace(".unknown.unknown", "").replace(".unknown", "");
+    // 清洗因为模板中 "[title] - [name]" 名字为空而遗留的尾部 " - "
+    let trimmed_name = base_name.trim_end_matches(" - ").trim_end_matches(" -").to_string();
+    base_name = if trimmed_name.is_empty() { "download_file".to_string() } else { trimmed_name };
+
+    let mut final_filename = base_name.clone();
+
+    // 如果服务器返回了真实名字，融合服务器后缀与前端标题
+    if let Some(rf) = real_filename {
+        let sanitized_rf = utils::sanitize_filename(&rf);
+        if let Some(ext_idx) = sanitized_rf.rfind('.') {
+            let ext = &sanitized_rf[ext_idx..]; // 包含 . 点号
+            final_filename = format!("{}{}", base_name, ext);
+        } else {
+            if !final_filename.contains('.') {
+                let e = real_ext.unwrap_or_else(|| "mp4".to_string());
+                final_filename = format!("{}.{}", final_filename, e);
+            }
+        }
+    } else {
+        // 如果服务器没有返回真实名字，使用 MIME 兜底后缀
+        if !final_filename.contains('.') {
+            let ext = real_ext.unwrap_or_else(|| "mp4".to_string());
+            final_filename = format!("{}.{}", final_filename, ext);
+        }
+    }
+    // ======================================================
+
     let file_path = std::path::Path::new(&save_dir).join(&final_filename);
 
     {
@@ -135,7 +191,7 @@ pub async fn download_native(_app: AppHandle, state: AppState, task: &Task) -> R
             let current_bytes = downloaded_clone.load(Ordering::Relaxed);
             
             let instant_speed = (current_bytes.saturating_sub(last_bytes)) as f64 * 2.0;
-            // 【优化】使用指数移动平均(EMA)平滑下载速度，避免 UI 数值剧烈跳动
+            // 使用指数移动平均(EMA)平滑下载速度，避免 UI 数值剧烈跳动
             smoothed_speed = if smoothed_speed == 0.0 { instant_speed } else { smoothed_speed * 0.7 + instant_speed * 0.3 };
             
             let mut eta = 0;
@@ -208,7 +264,7 @@ pub async fn download_native(_app: AppHandle, state: AppState, task: &Task) -> R
 
     let final_size = if is_stream_fallback { downloaded.load(Ordering::Relaxed) } else { total_size };
 
-    // 【优化】清理失败任务的残留文件
+    // 清理失败任务的残留文件
     if final_size == 0 || (total_size > 0 && final_size < total_size) {
         let _ = std::fs::remove_file(&file_path);
         return Err("下载失败: 链接已失效、服务器断开连接或任务被取消".into());
