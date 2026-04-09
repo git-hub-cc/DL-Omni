@@ -2,7 +2,7 @@
   import { taskStore } from '$lib/stores/tasks.svelte';
   import { configStore } from '$lib/stores/config.svelte';
   import { IPC } from '$lib/api/ipc';
-  import { formatUrl } from '$lib/utils/url';
+  import { formatUrl, extractUrls } from '$lib/utils/url';
   import ProgressBar from '$lib/components/ui/ProgressBar.svelte';
   import Modal from '$lib/components/ui/Modal.svelte';
   import type { MediaInfo } from '$lib/types';
@@ -48,14 +48,36 @@
   async function handleParse() {
     if (!inputUrl) return;
     
-    // 调用智能补全 URL 工具
-    inputUrl = formatUrl(inputUrl);
+    // 调用智能批量提取工具
+    const urls = extractUrls(inputUrl);
+
+    if (urls.length === 0) {
+      // 若正则未匹配到，尝试作为单个域名兜底补全
+      const singleUrl = formatUrl(inputUrl);
+      if (singleUrl) {
+        urls.push(singleUrl);
+      } else {
+        parseError = '未检测到有效的流媒体链接';
+        return;
+      }
+    }
     
     parseError = '';
     isParsing = true;
+
+    // 分支 1：批量解析模式
+    if (urls.length > 1) {
+      showNewTaskModal = false;
+      taskStore.submitBatchTasks(urls, undefined);
+      inputUrl = '';
+      isParsing = false;
+      return;
+    }
     
+    // 分支 2：单链接解析模式（保留原有合集弹窗逻辑）
+    const finalUrl = urls[0];
     try {
-      const info = await IPC.parseUrl(inputUrl);
+      const info = await IPC.parseUrl(finalUrl);
       parsedInfo = info;
       
       if (info.playlist_entries && info.playlist_entries.length > 1) {
@@ -66,15 +88,15 @@
         showPlaylistModal = true;
       } else {
         showNewTaskModal = false;
-        const tempId = taskStore.createTempTask(inputUrl, "解析/处理中...");
-        await taskStore.commitTask(tempId, inputUrl, info, undefined, undefined);
+        const tempId = taskStore.createTempTask(finalUrl, "解析/处理中...");
+        await taskStore.commitTask(tempId, finalUrl, info, undefined, undefined);
         inputUrl = '';
       }
     } catch (e: any) {
       // 常规解析失败时，取消强制入队，直接带参数跳转到嗅探页面
       console.warn('常规解析失败，引导跳转至嗅探页面:', e);
       showNewTaskModal = false;
-      goto(`/sniffer?url=${encodeURIComponent(inputUrl)}`);
+      goto(`/sniffer?url=${encodeURIComponent(finalUrl)}`);
       inputUrl = '';
     } finally {
       isParsing = false;
@@ -99,11 +121,18 @@
 
   function toggleSelectAll() {
     if (!parsedInfo?.playlist_entries) return;
-    if (selectedItems.size === parsedInfo.playlist_entries.length) {
-      selectedItems.clear();
-    } else {
-      selectedItems = new Set(parsedInfo.playlist_entries.map((e, i) => getEntryId(e, i)));
-    }
+    
+    const allIds = parsedInfo.playlist_entries.map((e, i) => getEntryId(e, i));
+    
+    // 严格反选逻辑：对所有项目进行状态翻转
+    allIds.forEach(id => {
+      if (selectedItems.has(id)) {
+        selectedItems.delete(id);
+      } else {
+        selectedItems.add(id);
+      }
+    });
+    selectedItems = new Set(selectedItems); // 触发响应式更新并修复之前 clear() 不触发更新的问题
   }
 
   function toggleSelectCurrentPage() {
@@ -114,13 +143,14 @@
         return getEntryId(e, globalIndex);
     });
     
-    const allSelected = currentIds.every(id => selectedItems.has(id));
-    
-    if (allSelected) {
-        currentIds.forEach(id => selectedItems.delete(id));
-    } else {
-        currentIds.forEach(id => selectedItems.add(id));
-    }
+    // 严格反选逻辑：仅对当前页项目进行状态翻转
+    currentIds.forEach(id => {
+        if (selectedItems.has(id)) {
+            selectedItems.delete(id);
+        } else {
+            selectedItems.add(id);
+        }
+    });
     selectedItems = new Set(selectedItems); // 触发响应式更新
   }
 
@@ -267,21 +297,20 @@
 
   <Modal show={showNewTaskModal} title="新建下载任务" onclose={() => showNewTaskModal = false}>
     <div class="space-y-4">
-      <div class="flex space-x-2">
-        <div class="relative flex-1">
-          <input
-            type="text"
-            bind:value={inputUrl}
-            placeholder="粘贴视频或合集链接"
-            class="w-full bg-zinc-950 border border-zinc-700 focus:border-accent-blue rounded-lg pl-4 pr-20 py-3 text-sm text-zinc-100 outline-none transition-colors"
-            onkeydown={(e) => e.key === 'Enter' && !isParsing && handleParse()}
-          />
+      <div class="flex flex-col space-y-3">
+        <textarea
+          bind:value={inputUrl}
+          placeholder="粘贴单个视频链接，或批量粘贴包含多个链接的文本内容..."
+          class="w-full bg-zinc-950 border border-zinc-700 focus:border-accent-blue rounded-lg px-4 py-3 text-sm text-zinc-100 outline-none transition-colors resize-y min-h-[100px] max-h-48"
+          onkeydown={(e) => { if (e.key === 'Enter' && !e.shiftKey && !isParsing) { e.preventDefault(); handleParse(); } }}
+        ></textarea>
+        <div class="flex justify-end">
           <button
-            class="absolute right-1.5 top-1.5 bottom-1.5 px-4 bg-accent-blue hover:bg-blue-600 text-white text-xs font-medium rounded-md transition-colors disabled:opacity-50"
+            class="px-6 py-2 bg-accent-blue hover:bg-blue-600 text-white text-sm font-medium rounded-lg transition-colors disabled:opacity-50"
             onclick={handleParse}
             disabled={!inputUrl || isParsing}
           >
-            {isParsing ? '解析中' : '解析'}
+            {isParsing ? '解析中...' : '解析并提取'}
           </button>
         </div>
       </div>
@@ -292,7 +321,7 @@
         </div>
       {/if}
       <div class="text-[11px] text-zinc-500">
-        💡 提示：可在“全局设置”中开启使用内置 Cookie 解析，以突破 1080P 或高画质会员限制。若直接解析失败或遭遇防盗链，将自动跳转至“嗅探”功能。
+        💡 提示：支持一键混贴包含多个链接的文本。若直接解析失败或遭遇防盗链，将自动跳转至“嗅探”功能。
       </div>
     </div>
   </Modal>
@@ -315,7 +344,7 @@
             class="text-xs text-zinc-400 hover:text-zinc-200 border border-zinc-700 hover:bg-zinc-800/50 px-3 py-1.5 rounded transition-colors"
             onclick={toggleSelectAll}
           >
-            全部全选/反选
+            全选/反选
           </button>
         </div>
       </div>

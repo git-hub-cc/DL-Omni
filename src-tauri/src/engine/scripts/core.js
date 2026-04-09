@@ -29,6 +29,14 @@
         try {
             const ogTitle = document.querySelector('meta[property="og:title"]');
             let title = ogTitle ? ogTitle.getAttribute('content') : document.title;
+            
+            if (title) {
+                // 清理各大网盘常见的分享后缀废话，防止污染文件名和搜索干扰
+                title = title.replace(/\s*is shared on PikPak.*$/i, '');
+                title = title.replace(/\s*-\s*阿里云盘分享.*$/i, '');
+                title = title.replace(/\s*-\s*夸克网盘分享.*$/i, '');
+            }
+            
             return title ? title.trim() : '未知网页';
         } catch (e) {
             return '未知网页';

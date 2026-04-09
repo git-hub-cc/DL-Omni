@@ -121,7 +121,7 @@ class TaskStore {
       }
       
       const currentTitle = this.tasks[tempId].title;
-      const title = (currentTitle && currentTitle !== "解析/处理中...") ? currentTitle : (info.title || "未知标题");
+      const title = (currentTitle && currentTitle !== "解析/处理中..." && currentTitle !== "排队解析中...") ? currentTitle : (info.title || "未知标题");
       const thumbnail: string | undefined = info.thumbnail || undefined;
       
       const taskId = await IPC.createTask(url, title, thumbnail, formatId, playlistItems, httpHeaders);
@@ -164,6 +164,31 @@ class TaskStore {
       await this.commitTask(tempId, url, info, undefined, httpHeaders);
     } catch (e: any) {
       this.update(tempId, { status: 'error', title: '解析失败', error_msg: e?.toString() });
+    }
+  }
+
+  /**
+   * 批量提交任务（串行解析，最小化后端入侵并防止并发拥堵）
+   */
+  async submitBatchTasks(urls: string[], httpHeaders?: string) {
+    // 1. 立即在界面上生成所有排队中的占位任务，提供快速 UI 响应
+    const pendingItems = urls.map(url => {
+      const tempId = this.createTempTask(url, "排队解析中...", httpHeaders);
+      return { url, tempId };
+    });
+
+    // 2. 前端控制的串行解析队列
+    for (const item of pendingItems) {
+      // 检查任务是否在排队过程中被用户手动移除
+      if (!this.tasks[item.tempId]) continue;
+
+      this.update(item.tempId, { title: "解析/处理中..." });
+      try {
+        const info = await IPC.parseUrl(item.url);
+        await this.commitTask(item.tempId, item.url, info, undefined, httpHeaders);
+      } catch (e: any) {
+        this.update(item.tempId, { status: 'error', title: '解析失败', error_msg: e?.toString() });
+      }
     }
   }
 

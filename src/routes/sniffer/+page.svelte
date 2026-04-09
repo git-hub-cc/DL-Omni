@@ -15,6 +15,27 @@
   let isSniffing = $state(false);
   let unlisten: UnlistenFn | null = null;
 
+  // 新增：抽屉层交互状态
+  let isPaused = $state(false); // 是否暂停接收新嗅探结果
+  let filterText = $state('');  // 搜索过滤文本
+  let selectedUrls = $state<Set<string>>(new Set()); // 选中的资源 URL 集合
+
+  // 派生状态：根据搜索框过滤资源
+  let filteredResources = $derived(
+    capturedResources.filter(res => {
+      if (!filterText) return true;
+      const lowerFilter = filterText.toLowerCase();
+      const title = taskStore.parseTemplate(res).toLowerCase();
+      return title.includes(lowerFilter) || res.url.toLowerCase().includes(lowerFilter);
+    })
+  );
+
+  // 派生状态：当前过滤列表是否已全选
+  let isAllSelected = $derived(
+    filteredResources.length > 0 &&
+    filteredResources.every(res => selectedUrls.has(res.url))
+  );
+
   const shortcuts = [
     { title: '音乐检索', url: 'https://music.gdstudio.xyz/', desc: 'music.gdstudio.xyz', icon: 'M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3' },
     { title: '视频搜索', url: 'https://www.iyf.lv/', desc: 'www.iyf.lv', icon: 'M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z' },
@@ -22,17 +43,18 @@
   ];
 
   onMount(async () => {
-    // 检查是否从主页抛出了异常链接，若有，自动填入输入框引导嗅探
     const queryUrl = $page.url.searchParams.get('url');
     if (queryUrl) {
       url = queryUrl;
     }
 
     unlisten = await IPC.listenSniffedResources((resource: SniffedResource) => {
-      // 增加前端动态正则黑名单过滤
+      // 如果用户点击了“暂停嗅探”，则直接丢弃新到来的事件
+      if (isPaused) return;
+
       const blacklist = configStore.settings.sniff_blacklist;
       if (blacklist && new RegExp(blacklist, 'i').test(resource.url)) {
-        return; 
+        return;
       }
 
       if (!capturedResources.find(r => r.url === resource.url)) {
@@ -48,13 +70,14 @@
 
   async function start() {
     if (!url) return;
-    
-    // 调用智能补全 URL 工具
     url = formatUrl(url);
-    
+
     isSniffing = true;
+    isPaused = false;
     capturedResources = [];
+    selectedUrls.clear();
     showDrawer = false;
+
     try {
       await IPC.startSniffing(url);
     } catch (e) {
@@ -72,6 +95,40 @@
     showDrawer = false;
     taskStore.submitSniffedTask(resource);
     goto('/');
+  }
+
+  function handleBatchDownload() {
+    if (selectedUrls.size === 0) return;
+
+    showDrawer = false;
+    const resourcesToDownload = capturedResources.filter(r => selectedUrls.has(r.url));
+
+    for (const res of resourcesToDownload) {
+      taskStore.submitSniffedTask(res);
+    }
+
+    selectedUrls.clear();
+    goto('/');
+  }
+
+  function toggleSelectAll() {
+    if (isAllSelected) {
+      // 当前过滤视图全选时，取消当前视图中所有项的选中状态
+      filteredResources.forEach(res => selectedUrls.delete(res.url));
+    } else {
+      // 否则将过滤视图中所有项加入选中状态
+      filteredResources.forEach(res => selectedUrls.add(res.url));
+    }
+    selectedUrls = new Set(selectedUrls); // 触发 Svelte 5 响应式更新
+  }
+
+  function toggleSelection(resourceUrl: string) {
+    if (selectedUrls.has(resourceUrl)) {
+      selectedUrls.delete(resourceUrl);
+    } else {
+      selectedUrls.add(resourceUrl);
+    }
+    selectedUrls = new Set(selectedUrls);
   }
 
   function handleShortcutClick(targetUrl: string) {
@@ -92,7 +149,7 @@
       />
     </div>
     {#if isSniffing}
-      <button class="px-4 py-2 bg-red-500/10 hover:bg-red-500/20 text-red-500 text-sm font-medium rounded-lg transition-colors" onclick={stop}>停止侦听</button>
+      <button class="px-4 py-2 bg-red-500/10 hover:bg-red-500/20 text-red-500 text-sm font-medium rounded-lg transition-colors" onclick={stop}>停止引擎</button>
     {:else}
       <button class="px-4 py-2 bg-accent-blue hover:bg-blue-600 text-white text-sm font-medium rounded-lg transition-colors" onclick={start}>开启高级嗅探窗</button>
     {/if}
@@ -127,6 +184,7 @@
     {/if}
   </div>
 
+  <!-- 悬浮按钮 -->
   <button
     class="absolute right-8 bottom-8 w-14 h-14 bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 rounded-full shadow-xl flex items-center justify-center z-40 group"
     onclick={() => showDrawer = !showDrawer}
@@ -139,6 +197,7 @@
     {/if}
   </button>
 
+  <!-- 底部抽屉 -->
   {#if showDrawer}
     <div
       class="absolute inset-0 bg-black/60 backdrop-blur-sm z-40"
@@ -148,35 +207,120 @@
       onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') showDrawer = false; }}
       aria-label="关闭抽屉层"
     ></div>
-    <div class="absolute inset-x-0 bottom-0 h-[30rem] bg-zinc-900 border-t border-zinc-700 shadow-2xl flex flex-col z-50">
-      <div class="flex justify-between items-center p-4 border-b border-zinc-800/50">
-        <h3 class="text-sm font-medium text-zinc-100">嗅探到的资源 ({capturedResources.length})</h3>
-        <button
-          onclick={() => showDrawer = false}
-          class="text-zinc-500 hover:text-zinc-300"
-          aria-label="关闭"
-          title="关闭"
-        >
-          <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
-        </button>
-      </div>
-      <div class="flex-1 overflow-y-auto p-4 space-y-3">
-        {#each capturedResources as res}
-          <div class="flex flex-col p-3 bg-zinc-800/30 border border-zinc-800 rounded-lg hover:bg-zinc-800/60">
-            <div class="flex items-start justify-between">
-              <div class="flex-1 min-w-0 pr-4">
-                <h4 class="text-xs font-medium text-zinc-200 truncate">{taskStore.parseTemplate(res)}</h4>
-                <p class="text-[9px] text-zinc-500 mt-1 truncate font-mono">来源: {res.page_title || '未知网页'}</p>
-                <p class="text-[9px] text-zinc-400 mt-0.5 truncate font-mono opacity-60">{res.url}</p>
-              </div>
-              <button class="shrink-0 px-3 py-1.5 bg-zinc-200 hover:bg-white text-zinc-900 text-xs font-bold rounded transition-colors" onclick={() => handleDownload(res)}>提取</button>
-            </div>
-            <div class="flex gap-2 mt-2">
-              <span class="px-1.5 py-0.5 bg-zinc-700/50 text-accent-blue border border-zinc-700 rounded text-[9px] uppercase">{res.ext || res.type}</span>
-              {#if res.headers?.Cookie}<span class="px-1.5 py-0.5 bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 rounded text-[9px]">含鉴权</span>{/if}
-            </div>
+
+    <div class="absolute inset-x-0 bottom-0 h-[34rem] bg-zinc-900 border-t border-zinc-700 shadow-2xl flex flex-col z-50">
+      <!-- 抽屉头部 (标题 & 操作) -->
+      <div class="flex flex-col p-4 border-b border-zinc-800/80 space-y-3 bg-zinc-900 shrink-0">
+        <div class="flex justify-between items-center">
+          <h3 class="text-sm font-medium text-zinc-100 flex items-center">
+            嗅探到的资源 <span class="ml-2 px-1.5 py-0.5 bg-zinc-800 rounded text-xs">{filteredResources.length}</span>
+          </h3>
+          <div class="flex items-center space-x-2">
+            <!-- 暂停/继续接收按钮 -->
+            <button
+              class="flex items-center space-x-1 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors border {isPaused ? 'bg-emerald-500/10 text-emerald-500 border-emerald-500/20 hover:bg-emerald-500/20' : 'bg-zinc-800 text-zinc-300 border-zinc-700 hover:bg-zinc-700'}"
+              onclick={() => isPaused = !isPaused}
+            >
+              {#if isPaused}
+                <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                <span>继续嗅探</span>
+              {:else}
+                <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 9v6m4-6v6m7-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                <span>暂停接收</span>
+              {/if}
+            </button>
+            <button
+              onclick={() => showDrawer = false}
+              class="p-1.5 text-zinc-500 hover:text-zinc-200 hover:bg-zinc-800 rounded transition-colors"
+              aria-label="关闭"
+              title="关闭"
+            >
+              <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+            </button>
           </div>
-        {/each}
+        </div>
+
+        <!-- 筛选与批量操作栏 -->
+        <div class="flex items-center space-x-3">
+          <button
+            class="flex items-center space-x-1.5 px-3 py-1.5 bg-zinc-800/50 hover:bg-zinc-800 border border-zinc-700/50 rounded-md text-xs text-zinc-300 transition-colors shrink-0"
+            onclick={toggleSelectAll}
+          >
+            <div class="w-3.5 h-3.5 rounded border flex items-center justify-center transition-colors {isAllSelected ? 'bg-accent-blue border-accent-blue' : 'border-zinc-500'}">
+              {#if isAllSelected}
+                <svg class="w-2.5 h-2.5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M5 13l4 4L19 7"/></svg>
+              {/if}
+            </div>
+            <span>全选</span>
+          </button>
+
+          <div class="flex-1 relative">
+            <svg class="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
+            <input
+              type="text"
+              bind:value={filterText}
+              placeholder="搜索标题或链接..."
+              class="w-full bg-zinc-950 border border-zinc-800 rounded-md pl-9 pr-3 py-1.5 text-xs text-zinc-200 outline-none focus:border-accent-blue transition-colors"
+            />
+          </div>
+
+          <button
+            class="px-4 py-1.5 bg-accent-blue hover:bg-blue-600 text-white text-xs font-medium rounded-md disabled:opacity-30 disabled:cursor-not-allowed transition-colors shrink-0"
+            disabled={selectedUrls.size === 0}
+            onclick={handleBatchDownload}
+          >
+            批量提取 ({selectedUrls.size})
+          </button>
+        </div>
+      </div>
+
+      <!-- 列表内容区 -->
+      <div class="flex-1 overflow-y-auto p-4 space-y-2">
+        {#if filteredResources.length === 0}
+          <div class="h-full flex flex-col items-center justify-center text-zinc-600 space-y-2">
+            <svg class="w-8 h-8" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5m16 0h-2.586a1 1 0 00-.707.293l-2.414 2.414a1 1 0 01-.707.293h-3.172a1 1 0 01-.707-.293l-2.414-2.414A1 1 0 006.586 13H4"/></svg>
+            <span class="text-xs">无匹配记录</span>
+          </div>
+        {:else}
+          {#each filteredResources as res (res.url)}
+            <!-- svelte-ignore a11y_click_events_have_key_events -->
+            <!-- svelte-ignore a11y_no_static_element_interactions -->
+            <div
+              class="flex flex-col p-3 bg-zinc-800/30 border {selectedUrls.has(res.url) ? 'border-accent-blue/50 bg-accent-blue/5' : 'border-zinc-800'} rounded-lg hover:bg-zinc-800/60 transition-colors cursor-pointer"
+              onclick={() => toggleSelection(res.url)}
+            >
+              <div class="flex items-start">
+                <div class="mt-1 mr-3 shrink-0">
+                  <div class="w-4 h-4 rounded border flex items-center justify-center transition-colors {selectedUrls.has(res.url) ? 'bg-accent-blue border-accent-blue' : 'border-zinc-600'}">
+                    {#if selectedUrls.has(res.url)}
+                      <svg class="w-3 h-3 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M5 13l4 4L19 7"/></svg>
+                    {/if}
+                  </div>
+                </div>
+
+                <div class="flex-1 min-w-0 pr-4">
+                  <h4 class="text-xs font-medium text-zinc-200 truncate">{taskStore.parseTemplate(res)}</h4>
+                  <p class="text-[9px] text-zinc-500 mt-1 truncate font-mono">来源: {res.page_title || '未知网页'}</p>
+                  <p class="text-[9px] text-zinc-400 mt-0.5 truncate font-mono opacity-60">{res.url}</p>
+
+                  <div class="flex gap-2 mt-2">
+                    <span class="px-1.5 py-0.5 bg-zinc-700/50 text-accent-blue border border-zinc-700 rounded text-[9px] uppercase">{res.ext || res.type}</span>
+                    {#if res.headers?.Cookie}
+                      <span class="px-1.5 py-0.5 bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 rounded text-[9px]">含鉴权</span>
+                    {/if}
+                  </div>
+                </div>
+
+                <button
+                  class="shrink-0 px-3 py-1.5 bg-zinc-200 hover:bg-white text-zinc-900 text-xs font-bold rounded transition-colors"
+                  onclick={(e) => { e.stopPropagation(); handleDownload(res); }}
+                >
+                  提取
+                </button>
+              </div>
+            </div>
+          {/each}
+        {/if}
       </div>
     </div>
   {/if}
