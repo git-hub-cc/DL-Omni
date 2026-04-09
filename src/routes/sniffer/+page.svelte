@@ -6,7 +6,7 @@
   import { goto } from '$app/navigation';
   import type { SniffedResource } from '$lib/types';
 
-  let url = $state('https://m.bilibili.com');
+  let url = $state('https://www.douyin.com/jingxuan');
   let capturedResources = $state<SniffedResource[]>([]);
   let showDrawer = $state(false);
   let isSniffing = $state(false);
@@ -38,7 +38,8 @@
     unlisten = await IPC.listenSniffedResources((resource: SniffedResource) => {
       // 避免重复链接
       if (!capturedResources.find(r => r.url === resource.url)) {
-        capturedResources = [...capturedResources, resource];
+        // 修改点：将最新捕获的资源插入到数组最前面，实现倒序显示
+        capturedResources = [resource, ...capturedResources];
       }
     });
   });

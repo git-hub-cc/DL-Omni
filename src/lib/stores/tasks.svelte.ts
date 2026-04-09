@@ -5,7 +5,10 @@ import { configStore } from '$lib/stores/config.svelte';
 class TaskStore {
   tasks = $state<Record<string, Task>>({});
 
-  taskList = $derived(Object.values(this.tasks));
+  // 修改点：对派生出的任务数组按创建时间降序排序
+  taskList = $derived(
+    Object.values(this.tasks).sort((a, b) => b.created_at - a.created_at)
+  );
   
   activeTasks = $derived(
     this.taskList.filter(t => 
@@ -121,7 +124,7 @@ class TaskStore {
           downloaded_bytes: 0,
           speed: 0,
           eta: 0,
-          created_at: Date.now(),
+          created_at: Date.now(), // 注意这里：保留原有逻辑，新建任务取最新时间戳
           error_msg: undefined
         });
       }
