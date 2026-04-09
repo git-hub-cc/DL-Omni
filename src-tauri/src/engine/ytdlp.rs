@@ -1,33 +1,42 @@
 use std::process::Stdio;
+use std::path::PathBuf;
+use tauri::{AppHandle, Manager};
 use tokio::process::Command;
 use tokio::io::{AsyncBufReadExt, BufReader};
-use tauri::AppHandle;
 use regex::Regex;
 use crate::models::{MediaInfo, PlaylistItem, Task, TaskStatus};
 use crate::state::{AppState, TaskProgressUpdate};
 use crate::utils;
 
+/// 获取应用专用的内置 cookies.txt 路径
+fn get_internal_cookie_path(app: &AppHandle) -> PathBuf {
+    let app_dir = app.path().app_data_dir().unwrap_or_else(|_| PathBuf::from("./"));
+    app_dir.join("cookies.txt")
+}
+
 /// 调用 yt-dlp -J 解析链接的元数据
 pub async fn parse_media_info(url: &str, app: AppHandle, state: AppState) -> Result<MediaInfo, String> {
     let ytdlp_path = utils::get_ytdlp_path(&app)?;
 
-    let browser_cookie = {
+    let use_cookie = {
         let config = state.config.lock().await;
-        config.settings.browser_cookie.clone()
+        config.settings.use_cookie
     };
 
     let mut cmd = Command::new(&ytdlp_path);
 
-    // 【修改点】：增加 --ignore-no-formats-error，强制忽略无格式报错并输出基础元数据
+    // 增加 --ignore-no-formats-error，强制忽略无格式报错并输出基础元数据
     cmd.arg("--dump-single-json") 
         .arg("--flat-playlist")
         .arg("--no-warnings")      
         .arg("--ignore-no-formats-error")
         .arg(url);
 
-    if let Some(cookie) = browser_cookie {
-        if cookie != "none" && !cookie.is_empty() {
-            cmd.arg("--cookies-from-browser").arg(cookie);
+    // 如果开启了内置 Cookie，则指定读取 Webview 生成的 cookies.txt
+    if use_cookie {
+        let cookie_file = get_internal_cookie_path(&app);
+        if cookie_file.exists() {
+            cmd.arg("--cookies").arg(cookie_file);
         }
     }
 
@@ -40,9 +49,6 @@ pub async fn parse_media_info(url: &str, app: AppHandle, state: AppState) -> Res
 
     if !output.status.success() {
         let err = String::from_utf8_lossy(&output.stderr);
-        if err.contains("database is locked") || err.contains("Could not copy Chrome cookie database") {
-            return Err("浏览器Cookie数据库正被占用，请彻底关闭该浏览器后再尝试解析！".into());
-        }
         return Err(format!("yt-dlp error: {}", err));
     }
 
@@ -53,9 +59,17 @@ pub async fn parse_media_info(url: &str, app: AppHandle, state: AppState) -> Res
     if let Some(entries) = v.get("entries").and_then(|e| e.as_array()) {
         let mut items = Vec::new();
         for (i, entry) in entries.iter().enumerate() {
+            // 通过多字段尝试提取文件名，避免在不同流媒体平台或特例下出现 "Unknown"
+            let title = entry.get("title").and_then(|t| t.as_str())
+                .or_else(|| entry.get("fulltitle").and_then(|t| t.as_str()))
+                .or_else(|| entry.get("name").and_then(|t| t.as_str()))
+                .or_else(|| entry.get("id").and_then(|t| t.as_str()))
+                .or_else(|| entry.get("url").and_then(|t| t.as_str()))
+                .unwrap_or("Unknown").to_string();
+
             items.push(PlaylistItem {
                 playlist_index: entry.get("playlist_index").and_then(|idx| idx.as_u64()).map(|idx| idx as u32).or(Some((i + 1) as u32)),
-                title: entry.get("title").and_then(|t| t.as_str()).unwrap_or("Unknown").to_string(),
+                title,
                 duration: entry.get("duration").and_then(|d| d.as_f64()),
                 url: entry.get("url").and_then(|u| u.as_str()).map(|s| s.to_string()),
                 id: entry.get("id").and_then(|id| id.as_str()).map(|s| s.to_string()),
@@ -99,13 +113,13 @@ fn parse_eta(eta_str: &str) -> u64 {
 pub async fn download_via_ytdlp(app: AppHandle, state: AppState, task: &Task) -> Result<u64, String> {
     let ytdlp_path = utils::get_ytdlp_path(&app)?;
 
-    let (save_dir, max_threads, split_av, browser_cookie, include_metadata) = {
+    let (save_dir, max_threads, split_av, use_cookie, include_metadata) = {
         let config = state.config.lock().await;
         (
             config.settings.default_download_path.clone(),
             config.settings.max_threads_per_task.max(1),
             config.settings.split_audio_video,
-            config.settings.browser_cookie.clone(),
+            config.settings.use_cookie,
             config.settings.include_metadata
         )
     };
@@ -121,7 +135,7 @@ pub async fn download_via_ytdlp(app: AppHandle, state: AppState, task: &Task) ->
     }
 
     let mut cmd = Command::new(&ytdlp_path);
-    cmd.kill_on_drop(true); // 【致命修复】确保异步任务被取消时，底层 yt-dlp 进程被杀死，防止僵尸进程
+    cmd.kill_on_drop(true); // 确保异步任务被取消时，底层 yt-dlp 进程被杀死，防止僵尸进程
     cmd.arg("-f").arg(&format_arg);
 
     if !split_av {
@@ -131,9 +145,11 @@ pub async fn download_via_ytdlp(app: AppHandle, state: AppState, task: &Task) ->
         }
     }
 
-    if let Some(cookie) = browser_cookie {
-        if cookie != "none" && !cookie.is_empty() {
-            cmd.arg("--cookies-from-browser").arg(cookie);
+    // 如果开启了内置 Cookie，则指定读取 Webview 生成的 cookies.txt
+    if use_cookie {
+        let cookie_file = get_internal_cookie_path(&app);
+        if cookie_file.exists() {
+            cmd.arg("--cookies").arg(cookie_file);
         }
     }
 
@@ -171,7 +187,7 @@ pub async fn download_via_ytdlp(app: AppHandle, state: AppState, task: &Task) ->
 
     cmd.arg("--concurrent-fragments").arg(max_threads.to_string())
         .arg("--newline")
-        .arg("--no-colors") // 【致命修复】禁用颜色输出，防止 ANSI 转义符破坏正则表达式导致进度条卡死
+        .arg("--no-colors") // 禁用颜色输出，防止 ANSI 转义符破坏正则表达式导致进度条卡死
         .arg(&task.url)
         .stdout(Stdio::piped())
         .stderr(Stdio::null());

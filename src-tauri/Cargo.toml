@@ -1,6 +1,6 @@
 [package]
 name = "src-tauri"
-version = "0.1.0"
+version = "0.3.0"
 description = "A high-performance media downloader based on Tauri 2 & Svelte 5."
 authors = ["DL-Omni Team"]
 edition = "2021"
@@ -25,7 +25,6 @@ serde_json = "1.0"
 
 # 异步运行环境
 tokio = { version = "1", features = ["full"] }
-futures-util = "0.3"
 
 # 数据库
 rusqlite = { version = "0.32.0", features = ["bundled"] }

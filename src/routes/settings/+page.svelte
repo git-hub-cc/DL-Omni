@@ -19,16 +19,8 @@
     updateStatusText = '正在获取云端版本...';
     try {
       const res = await invoke<{updated: boolean, version: string}>('check_engine_update');
-      
-      // 更新全局设置中的版本号显示
       configStore.update({ yt_dlp_version: res.version });
-      
-      // 根据后端比对结果，给予不同的提示
-      if (res.updated) {
-        alert(`更新成功！已下载并替换为最新版本: ${res.version}`);
-      } else {
-        alert(`当前已是最新版: ${res.version}，无需更新。`);
-      }
+      alert(res.updated ? `更新成功: ${res.version}` : `已是最新: ${res.version}`);
     } catch(e) {
       alert(`更新失败: ${e}`);
     } finally {
@@ -38,51 +30,26 @@
   }
 </script>
 
-<div class="h-full overflow-y-auto p-6 space-y-6">
+<div class="h-full overflow-y-auto p-6 space-y-8">
   <h2 class="text-lg font-medium text-zinc-100 tracking-wide">全局设置</h2>
 
-  <!-- 存储配置 -->
   <section class="space-y-4">
-    <h3 class="text-xs font-bold text-zinc-500 uppercase tracking-wider">文件整理与存储</h3>
-    
+    <h3 class="text-xs font-bold text-zinc-500 uppercase tracking-wider">解析与下载</h3>
     <div class="p-5 bg-zinc-800/30 border border-zinc-800 rounded-xl space-y-6">
-      
-      <!-- 默认路径 -->
-      <div class="flex justify-between items-center">
-        <div>
-          <div class="text-sm font-medium text-zinc-200">默认保存位置</div>
-          <div class="text-xs text-zinc-500 mt-1">{config.default_download_path || '未设置 (默认保存至系统 Downloads)'}</div>
-        </div>
-        <button 
-          class="px-4 py-2 bg-zinc-800 hover:bg-zinc-700 text-sm font-medium text-zinc-200 rounded-lg transition-colors border border-zinc-700/50"
-          onclick={selectDirectory}
-        >
-          更改目录
-        </button>
-      </div>
-
-      <hr class="border-zinc-800">
-
-      <!-- 独立文件夹与元数据模式 -->
       <div class="flex justify-between items-center">
         <div class="pr-6">
-          <div class="text-sm font-medium text-zinc-200">独立目录与附带元数据归档</div>
-          <div class="text-xs text-zinc-500 mt-1 leading-relaxed">开启后，应用将为每个视频创建独立的子文件夹，并自动下载配套的封面海报、外挂字幕以及完整信息的 JSON 文件，同时将其内嵌进媒体中，极大地利于后期整理。</div>
+          <div class="text-sm font-medium text-zinc-200">使用内置浏览器 Cookie</div>
+          <div class="text-xs text-zinc-500 mt-1">开启后将使用内置浏览器 Cookie。请先前往左侧『嗅探』页面，访问目标网站并完成登录。</div>
         </div>
         <label class="relative inline-flex items-center cursor-pointer shrink-0">
-          <input 
-            type="checkbox" 
-            class="sr-only peer" 
-            checked={config.include_metadata}
-            onchange={(e) => configStore.update({ include_metadata: e.currentTarget.checked })}
-          >
-          <div class="w-11 h-6 bg-zinc-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-accent-blue"></div>
+          <input type="checkbox" class="sr-only peer" checked={config.use_cookie} onchange={(e) => configStore.update({ use_cookie: e.currentTarget.checked })}>
+          <div class="w-11 h-6 bg-zinc-700 rounded-full peer peer-checked:bg-accent-blue after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:after:translate-x-full"></div>
         </label>
       </div>
     </div>
   </section>
 
-  <!-- 引擎配置 -->
+  <!-- 恢复引擎配置 -->
   <section class="space-y-4">
     <h3 class="text-xs font-bold text-zinc-500 uppercase tracking-wider">引擎与网络控制</h3>
     
@@ -186,4 +153,66 @@
       </div>
     </div>
   </section>
+
+  <section class="space-y-4">
+    <h3 class="text-xs font-bold text-zinc-500 uppercase tracking-wider">嗅探与自动命名</h3>
+    <div class="p-5 bg-zinc-800/30 border border-zinc-800 rounded-xl space-y-6">
+      <div>
+        <div class="text-sm font-medium text-zinc-200">文件命名模板</div>
+        <div class="text-xs text-zinc-500 mt-1 mb-3">使用占位符自定义嗅探结果的默认名称</div>
+        <input 
+          type="text" 
+          class="w-full bg-zinc-950 border border-zinc-700 rounded-lg px-4 py-2 text-sm text-zinc-100 outline-none focus:border-accent-blue"
+          bind:value={configStore.settings.naming_template}
+          onchange={() => configStore.update({ naming_template: configStore.settings.naming_template })}
+        />
+        <div class="flex gap-4 mt-2 text-[10px] text-zinc-500">
+          <span>[title] 网页标题</span>
+          <span>[name] 文件原始名</span>
+          <span>[ext] 扩展名</span>
+          <span>[time] 日期戳</span>
+        </div>
+      </div>
+
+      <hr class="border-zinc-800">
+
+      <div>
+        <div class="text-sm font-medium text-zinc-200">嗅探正则黑名单</div>
+        <div class="text-xs text-zinc-500 mt-1 mb-3">匹配该正则的 URL 将被静默忽略 (用于屏蔽广告/统计)</div>
+        <input 
+          type="text" 
+          class="w-full bg-zinc-950 border border-zinc-700 rounded-lg px-4 py-2 text-sm font-mono text-emerald-400 outline-none focus:border-accent-blue"
+          bind:value={configStore.settings.sniff_blacklist}
+          onchange={() => configStore.update({ sniff_blacklist: configStore.settings.sniff_blacklist })}
+        />
+      </div>
+    </div>
+  </section>
+
+  <section class="space-y-4">
+    <h3 class="text-xs font-bold text-zinc-500 uppercase tracking-wider">文件整理与存储</h3>
+    <div class="p-5 bg-zinc-800/30 border border-zinc-800 rounded-xl space-y-6">
+      <div class="flex justify-between items-center">
+        <div>
+          <div class="text-sm font-medium text-zinc-200">默认保存位置</div>
+          <div class="text-xs text-zinc-500 mt-1">{config.default_download_path || '未设置'}</div>
+        </div>
+        <button class="px-4 py-2 bg-zinc-800 hover:bg-zinc-700 text-sm font-medium text-zinc-200 rounded-lg border border-zinc-700/50" onclick={selectDirectory}>更改目录</button>
+      </div>
+
+      <hr class="border-zinc-800">
+
+      <div class="flex justify-between items-center">
+        <div class="pr-6">
+          <div class="text-sm font-medium text-zinc-200">独立目录与附带元数据归档</div>
+          <div class="text-xs text-zinc-500 mt-1">为每个视频创建文件夹并下载封面、字幕及 JSON 描述信息。</div>
+        </div>
+        <label class="relative inline-flex items-center cursor-pointer shrink-0">
+          <input type="checkbox" class="sr-only peer" checked={config.include_metadata} onchange={(e) => configStore.update({ include_metadata: e.currentTarget.checked })}>
+          <div class="w-11 h-6 bg-zinc-700 rounded-full peer peer-checked:bg-accent-blue after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:after:translate-x-full"></div>
+        </label>
+      </div>
+    </div>
+  </section>
+
 </div>

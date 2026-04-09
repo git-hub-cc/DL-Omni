@@ -14,18 +14,21 @@
   let isParsing = $state(false);
   let parseError = $state('');
 
-  const browsers = [
-    { id: 'none', label: '不使用 Cookie' },
-    { id: 'chrome', label: 'Google Chrome' },
-    { id: 'edge', label: 'Microsoft Edge' },
-    { id: 'firefox', label: 'Mozilla Firefox' },
-    { id: 'safari', label: 'Apple Safari' },
-    { id: 'brave', label: 'Brave Browser' }
-  ];
-
   let parsedInfo = $state<MediaInfo | null>(null);
   let showPlaylistModal = $state(false);
   let selectedItems = $state<Set<number>>(new Set());
+
+  // 【新增】合集选择弹窗的分页逻辑与状态
+  let currentPage = $state(1);
+  const pageSize = 10;
+
+  let totalPages = $derived(
+    parsedInfo?.playlist_entries ? Math.ceil(parsedInfo.playlist_entries.length / pageSize) : 0
+  );
+
+  let paginatedEntries = $derived(
+    parsedInfo?.playlist_entries?.slice((currentPage - 1) * pageSize, currentPage * pageSize) || []
+  );
 
   let displayTasks = $derived.by(() => {
     switch (activeTab) {
@@ -34,6 +37,11 @@
       default: return taskStore.taskList.filter(t => t.status !== 'completed');
     }
   });
+
+  // 辅助函数：统一根据元素及索引获取合集子项的绑定 ID
+  function getEntryId(entry: any, index: number): number {
+    return entry.playlist_index || (index + 1);
+  }
 
   async function handleParse() {
     if (!inputUrl) return;
@@ -46,7 +54,9 @@
       
       if (info.playlist_entries && info.playlist_entries.length > 1) {
         showNewTaskModal = false;
-        selectedItems = new Set(info.playlist_entries.map((_, i) => i + 1));
+        // 初始化全部选中
+        selectedItems = new Set(info.playlist_entries.map((e, i) => getEntryId(e, i)));
+        currentPage = 1;
         showPlaylistModal = true;
       } else {
         showNewTaskModal = false;
@@ -55,12 +65,11 @@
         inputUrl = '';
       }
     } catch (e: any) {
-      // 【修改点】：前端兜底机制，无论解析报什么错，都强制把任务入队
+      // 前端兜底机制，无论解析报什么错，都强制把任务入队
       console.warn('常规解析失败，触发强制兜底入队机制:', e);
       showNewTaskModal = false;
       const tempId = taskStore.createTempTask(inputUrl, undefined);
       
-      // 构造一个兜底用的虚假 MediaInfo 数据强行推送任务
       const fallbackInfo: MediaInfo = {
         id: 'force_fallback',
         title: '未知媒体任务 (强制解析入队)',
@@ -89,6 +98,7 @@
     inputUrl = '';
     parsedInfo = null;
     selectedItems.clear();
+    currentPage = 1;
   }
 
   function toggleSelectAll() {
@@ -96,15 +106,33 @@
     if (selectedItems.size === parsedInfo.playlist_entries.length) {
       selectedItems.clear();
     } else {
-      selectedItems = new Set(parsedInfo.playlist_entries.map((_, i) => i + 1));
+      selectedItems = new Set(parsedInfo.playlist_entries.map((e, i) => getEntryId(e, i)));
     }
   }
 
-  function toggleItem(index: number) {
-    if (selectedItems.has(index)) {
-      selectedItems.delete(index);
+  function toggleSelectCurrentPage() {
+    if (!parsedInfo?.playlist_entries) return;
+    
+    const currentIds = paginatedEntries.map((e, i) => {
+        const globalIndex = (currentPage - 1) * pageSize + i;
+        return getEntryId(e, globalIndex);
+    });
+    
+    const allSelected = currentIds.every(id => selectedItems.has(id));
+    
+    if (allSelected) {
+        currentIds.forEach(id => selectedItems.delete(id));
     } else {
-      selectedItems.add(index);
+        currentIds.forEach(id => selectedItems.add(id));
+    }
+    selectedItems = new Set(selectedItems); // 触发响应式更新
+  }
+
+  function toggleItem(idx: number) {
+    if (selectedItems.has(idx)) {
+      selectedItems.delete(idx);
+    } else {
+      selectedItems.add(idx);
     }
     selectedItems = new Set(selectedItems);
   }
@@ -128,7 +156,6 @@
     } catch (e) { console.error('删除任务失败:', e); }
   }
 
-  // 【新增】辅助函数：解析任务绑定的 Headers JSON，判断是否为高权重的鉴权直链
   function isAuthTask(headersStr?: string): boolean {
     if (!headersStr) return false;
     try {
@@ -245,16 +272,6 @@
   <Modal show={showNewTaskModal} title="新建下载任务" onclose={() => showNewTaskModal = false}>
     <div class="space-y-4">
       <div class="flex space-x-2">
-        <select 
-          class="shrink-0 bg-zinc-950 border border-zinc-700 rounded-lg px-3 py-3 text-xs text-zinc-300 outline-none focus:border-accent-blue"
-          bind:value={configStore.settings.browser_cookie}
-          onchange={() => configStore.update({ browser_cookie: configStore.settings.browser_cookie })}
-        >
-          {#each browsers as b}
-            <option value={b.id}>{b.label}</option>
-          {/each}
-        </select>
-        
         <div class="relative flex-1">
           <input
             type="text"
@@ -279,55 +296,87 @@
         </div>
       {/if}
       <div class="text-[11px] text-zinc-500">
-        💡 提示：使用对应浏览器 Cookie 解析可突破 B站 1080P 或高画质会员限制。若直接解析失败或遭遇防盗链，请尝试左侧菜单栏的“嗅探”功能。
+        💡 提示：可在“全局设置”中开启使用内置 Cookie 解析，以突破 1080P 或高画质会员限制。若直接解析失败或遭遇防盗链，请尝试左侧菜单栏的“嗅探”功能。
       </div>
     </div>
   </Modal>
 
   <Modal show={showPlaylistModal} title="合集下载选择" onclose={() => showPlaylistModal = false}>
-    <div class="space-y-4 flex flex-col h-[50vh]">
+    <div class="space-y-4 flex flex-col h-[60vh]">
       <div class="flex justify-between items-end shrink-0">
         <div>
           <h4 class="text-sm font-medium text-zinc-200 line-clamp-1" title={parsedInfo?.title}>{parsedInfo?.title}</h4>
           <p class="text-xs text-zinc-500 mt-1">共 {parsedInfo?.playlist_entries?.length || 0} 个项目 · 已选 <span class="text-accent-blue">{selectedItems.size}</span> 个</p>
         </div>
-        <button 
-          class="text-xs text-zinc-400 hover:text-zinc-200 border border-zinc-700 px-3 py-1 rounded"
-          onclick={toggleSelectAll}
-        >
-          全选 / 反选
-        </button>
+        <div class="flex space-x-2">
+          <button 
+            class="text-xs text-zinc-400 hover:text-zinc-200 border border-zinc-700 hover:bg-zinc-800/50 px-3 py-1.5 rounded transition-colors"
+            onclick={toggleSelectCurrentPage}
+          >
+            本页全选/反选
+          </button>
+          <button 
+            class="text-xs text-zinc-400 hover:text-zinc-200 border border-zinc-700 hover:bg-zinc-800/50 px-3 py-1.5 rounded transition-colors"
+            onclick={toggleSelectAll}
+          >
+            全部全选/反选
+          </button>
+        </div>
       </div>
 
       <div class="flex-1 overflow-y-auto border border-zinc-800 rounded-lg bg-zinc-950 p-2 space-y-1">
-        {#if parsedInfo?.playlist_entries}
-          {#each parsedInfo.playlist_entries as entry, i}
-            {@const idx = entry.playlist_index || (i + 1)}
+        {#if paginatedEntries.length > 0}
+          {#each paginatedEntries as entry, i}
+            {@const globalIndex = (currentPage - 1) * pageSize + i}
+            {@const idx = getEntryId(entry, globalIndex)}
             <button 
               class="w-full flex items-center space-x-3 p-2 rounded hover:bg-zinc-800/50 transition-colors text-left"
               onclick={() => toggleItem(idx)}
             >
-              <div class="w-4 h-4 shrink-0 rounded border {selectedItems.has(idx) ? 'bg-accent-blue border-accent-blue' : 'border-zinc-600'} flex items-center justify-center">
+              <div class="w-4 h-4 shrink-0 rounded border {selectedItems.has(idx) ? 'bg-accent-blue border-accent-blue' : 'border-zinc-600'} flex items-center justify-center transition-colors">
                 {#if selectedItems.has(idx)}
                   <svg class="w-3 h-3 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M5 13l4 4L19 7"/></svg>
                 {/if}
               </div>
-              <span class="text-xs text-zinc-500 w-6 shrink-0">{idx}.</span>
-              <span class="text-sm text-zinc-300 truncate flex-1">{entry.title}</span>
+              <span class="text-xs text-zinc-500 w-8 shrink-0 text-right">{idx}.</span>
+              <span class="text-sm text-zinc-300 truncate flex-1" title={entry.title}>{entry.title}</span>
             </button>
           {/each}
         {/if}
       </div>
 
-      <div class="shrink-0 pt-2 flex justify-end space-x-2">
+      <!-- 分页控制栏 -->
+      {#if totalPages > 1}
+        <div class="flex justify-between items-center shrink-0 pt-1">
+          <button 
+            class="px-3 py-1.5 text-xs text-zinc-400 hover:text-zinc-200 bg-zinc-800/50 hover:bg-zinc-800 rounded disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+            disabled={currentPage === 1}
+            onclick={() => currentPage -= 1}
+          >
+            上一页
+          </button>
+          <span class="text-xs text-zinc-500 font-mono">
+            {currentPage} / {totalPages}
+          </span>
+          <button 
+            class="px-3 py-1.5 text-xs text-zinc-400 hover:text-zinc-200 bg-zinc-800/50 hover:bg-zinc-800 rounded disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+            disabled={currentPage === totalPages}
+            onclick={() => currentPage += 1}
+          >
+            下一页
+          </button>
+        </div>
+      {/if}
+
+      <div class="shrink-0 pt-3 flex justify-end space-x-2 border-t border-zinc-800/50">
         <button 
-          class="px-4 py-2 text-sm text-zinc-400 hover:text-zinc-200"
+          class="px-4 py-2 text-sm text-zinc-400 hover:text-zinc-200 transition-colors"
           onclick={() => showPlaylistModal = false}
         >
           取消
         </button>
         <button 
-          class="px-5 py-2 bg-accent-blue hover:bg-blue-600 text-white text-sm font-medium rounded-lg disabled:opacity-50"
+          class="px-5 py-2 bg-accent-blue hover:bg-blue-600 text-white text-sm font-medium rounded-lg disabled:opacity-50 transition-colors"
           disabled={selectedItems.size === 0}
           onclick={handleCommitPlaylist}
         >

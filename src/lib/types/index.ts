@@ -22,7 +22,6 @@ export interface Task {
   playlist_items?: string;   // 合集下载范围 (如 "1,3,5-7")
   
   // 【重要】绑定的自定义 HTTP 请求头 (JSON 字符串格式)。
-  // 如果任务是由多级嗅探器捕获，此处将包含突破防盗链所需的完整鉴权信息（包含且不限于 Cookie, Referer 等）
   http_headers?: string;     
 
   total_bytes: number;       // 文件总大小 (字节)
@@ -46,8 +45,10 @@ export interface Config {
   split_audio_video: boolean;  
   video_quality: string;       
   audio_quality: string;       
-  browser_cookie: string;      
-  include_metadata: boolean;   
+  use_cookie: boolean;         // 修改：是否使用内置浏览器的 Cookie
+  include_metadata: boolean;
+  naming_template: string;     // 新增：标题命名模板配置
+  sniff_blacklist: string;     // 新增：嗅探黑名单正则表达式
 }
 
 /**
@@ -92,8 +93,11 @@ export interface MediaInfo {
 export interface SniffedResource {
   url: string;
   type: string;             // 如 "video", "media (octet-stream)" 等
-  filename: string;
+  filename: string;         // Fallback 旧字段
+  page_title?: string;      // 网页抓取的 Meta Title
+  original_name?: string;   // URL 分割推断名
+  ext?: string;             // 扩展名后缀
   
-  // 动态提取的请求头集合，极大概率包含突破 PikPak / 阿里云盘 / B站等限制的 Cookie 与 Referer
+  // 动态提取的请求头集合
   headers?: Record<string, string>; 
 }

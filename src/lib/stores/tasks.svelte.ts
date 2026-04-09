@@ -5,7 +5,6 @@ import { configStore } from '$lib/stores/config.svelte';
 class TaskStore {
   tasks = $state<Record<string, Task>>({});
 
-  // 修改点：对派生出的任务数组按创建时间降序排序
   taskList = $derived(
     Object.values(this.tasks).sort((a, b) => b.created_at - a.created_at)
   );
@@ -54,14 +53,31 @@ class TaskStore {
     delete this.tasks[id];
   }
 
-  // --- 支持直链与合集交互的新版任务流 ---
+  /**
+   * 仿猫抓模板解析引擎
+   * 支持占位符: [title] 网页标题, [name] 原始名, [ext] 扩展名, [time] 时间戳
+   */
+  parseTemplate(resource: SniffedResource): string {
+    const template = configStore.settings.naming_template || '[title] - [name].[ext]';
+    const now = new Date();
+    const timestamp = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}`;
+    
+    let result = template
+      .replace('[title]', resource.page_title || '未知网页')
+      .replace('[name]', (resource.original_name || 'file').split('.')[0])
+      .replace('[ext]', resource.ext || 'mp4')
+      .replace('[time]', timestamp);
 
-  createTempTask(url: string, httpHeaders?: string): string {
+    // 基础清洗：防止模板配置错误导致文件名包含非法字符
+    return result.replace(/[\\/:*?"<>|]/g, '_').trim();
+  }
+
+  createTempTask(url: string, title: string, httpHeaders?: string): string {
     const tempId = `temp-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
     this.add({
       id: tempId,
       url: url,
-      title: "解析/处理中...",
+      title: title,
       thumbnail: undefined,
       status: 'pending',
       format_id: '',
@@ -87,24 +103,15 @@ class TaskStore {
       if (!this.tasks[tempId]) return;
       
       const { split_audio_video, video_quality, audio_quality } = configStore.settings;
-
       let formatId = 'direct'; 
 
       if (info.id !== 'direct_link') {
-        const videoFilter = video_quality === 'best'
-          ? 'bv*'
-          : `bv[height<=${video_quality.replace('p', '')}]`;
-
-        const audioFilter = audio_quality === 'best'
-          ? 'ba'
-          : `ba[abr<=${audio_quality.replace('k', '')}]`;
-
-        formatId = split_audio_video
-          ? `${videoFilter}/${audioFilter}`
-          : `${videoFilter}+${audioFilter}/b`;
+        const videoFilter = video_quality === 'best' ? 'bv*' : `bv[height<=${video_quality.replace('p', '')}]`;
+        const audioFilter = audio_quality === 'best' ? 'ba' : `ba[abr<=${audio_quality.replace('k', '')}]`;
+        formatId = split_audio_video ? `${videoFilter}/${audioFilter}` : `${videoFilter}+${audioFilter}/b`;
       }
       
-      const title = info.title || "未知标题";
+      const title = this.tasks[tempId].title !== "解析/处理中..." ? this.tasks[tempId].title : (info.title || "未知标题");
       const thumbnail: string | undefined = info.thumbnail || undefined;
       
       const taskId = await IPC.createTask(url, title, thumbnail, formatId, playlistItems, httpHeaders);
@@ -124,7 +131,7 @@ class TaskStore {
           downloaded_bytes: 0,
           speed: 0,
           eta: 0,
-          created_at: Date.now(), // 注意这里：保留原有逻辑，新建任务取最新时间戳
+          created_at: Date.now(),
           error_msg: undefined
         });
       }
@@ -140,9 +147,8 @@ class TaskStore {
     }
   }
 
-  // 常规前端解析入口 (手动提交链接)
   async submitNewTask(url: string, httpHeaders?: string) {
-    const tempId = this.createTempTask(url, httpHeaders);
+    const tempId = this.createTempTask(url, "解析/处理中...", httpHeaders);
     try {
       const info = await IPC.parseUrl(url);
       await this.commitTask(tempId, url, info, undefined, httpHeaders);
@@ -151,21 +157,18 @@ class TaskStore {
     }
   }
 
-  // 嗅探直链专用入口：跳过 IPC.parseUrl，增加 m3u8 格式判定
   async submitSniffedTask(resource: SniffedResource) {
     const headersStr = resource.headers ? JSON.stringify(resource.headers) : undefined;
-    const tempId = this.createTempTask(resource.url, headersStr);
+    
+    // 使用模板引擎生成良好的标题名
+    const finalTitle = this.parseTemplate(resource);
+    const tempId = this.createTempTask(resource.url, finalTitle, headersStr);
     
     try {
-      // 判断嗅探到的链接是否为 m3u8 (HLS 播放列表)
       const isM3u8 = resource.url.toLowerCase().includes('.m3u8');
-
-      // 伪造 MediaInfo。
-      // 如果是 m3u8，给一个非 'direct_link' 的 ID，使得 commitTask 使用普通的画质拼接格式 (走 yt-dlp)；
-      // 否则赋予 'direct_link' 标识，强制走原生直链下载引擎。
       const fakeInfo: MediaInfo = {
         id: isM3u8 ? 'hls_stream' : 'direct_link', 
-        title: resource.filename || '嗅探到的媒体文件',
+        title: finalTitle,
         duration: 0,
         thumbnail: '',
         formats: []

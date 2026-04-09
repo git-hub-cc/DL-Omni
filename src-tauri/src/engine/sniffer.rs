@@ -1,4 +1,40 @@
-use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
+use tauri::{AppHandle, Listener, Manager, WebviewUrl, WebviewWindowBuilder};
+use std::fs;
+
+/// 获取应用专用的内置 cookies.txt 路径
+fn get_internal_cookie_path(app: &AppHandle) -> std::path::PathBuf {
+    let app_dir = app.path().app_data_dir().unwrap_or_else(|_| std::path::PathBuf::from("./"));
+    app_dir.join("cookies.txt")
+}
+
+/// 解析单行 raw cookie 并转换为 Netscape HTTP Cookie File 格式的单行
+fn format_cookie_to_netscape(domain: &str, raw_cookie: &str) -> String {
+    let mut lines = String::new();
+    let parts = raw_cookie.split(';');
+    for part in parts {
+        let kv = part.trim();
+        if kv.is_empty() { continue; }
+        
+        let mut split = kv.splitn(2, '=');
+        let name = split.next().unwrap_or("");
+        let value = split.next().unwrap_or("");
+        
+        if name.is_empty() { continue; }
+
+        let formatted_domain = if domain.starts_with('.') { domain.to_string() } else { format!(".{}", domain) };
+        let include_subdomains = "TRUE";
+        let path = "/";
+        let secure = "FALSE";
+        // 赋予一个默认的一年后的过期时间时间戳，防止 yt-dlp 拒绝读取
+        let expiry = chrono::Utc::now().timestamp() + 31536000;
+
+        lines.push_str(&format!(
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
+            formatted_domain, include_subdomains, path, secure, expiry, name, value
+        ));
+    }
+    lines
+}
 
 /// 初始化高级嗅探器逻辑 (基于 Tauri 2 Webview 与猫抓级多层级脚本注入)
 pub async fn init_sniffer(url: String, app: AppHandle) -> Result<(), String> {
@@ -9,16 +45,58 @@ pub async fn init_sniffer(url: String, app: AppHandle) -> Result<(), String> {
     }
 
     // 核心拦截脚本：实现了 DOM 劫持、更稳健的启发式匹配、MIME 拦截与安全的 JSON 解析
+    // 【新增】将当前页面的 document.cookie 通过 IPC 持续发送回主进程，用于拼装 cookies.txt
     let init_script = r#"
         (function() {
             console.log("[DL-Omni] 猫抓级高级嗅探脚本已注入，开启底层多路侦听...");
             
-            // 去重池
             const emittedUrls = new Set();
+
+            function syncCookieToBackend() {
+                if (document.cookie && window.__TAURI_INTERNALS__) {
+                    window.__TAURI_INTERNALS__.invoke("plugin:event|emit", {
+                        event: "sniffed_cookie",
+                        payload: {
+                            domain: window.location.hostname,
+                            cookie: document.cookie
+                        }
+                    }).catch(() => {});
+                }
+            }
+
+            // 监听 DOM 加载完成及定期上报 Cookie 状态（处理跨域 iframe / 登录后状态跳转）
+            window.addEventListener('load', syncCookieToBackend);
+            setInterval(syncCookieToBackend, 5000);
+
+            // 提取网页元数据 (Title / OG Title)
+            function getPageMetadata() {
+                try {
+                    const ogTitle = document.querySelector('meta[property="og:title"]');
+                    let title = ogTitle ? ogTitle.getAttribute('content') : document.title;
+                    return title ? title.trim() : '未知网页';
+                } catch (e) {
+                    return '未知网页';
+                }
+            }
+
+            // 智能切割 URL 提取原始文件名和扩展名
+            function extractFileInfo(url) {
+                try {
+                    const parsed = new URL(url);
+                    const path = parsed.pathname;
+                    const filename = path.split('/').pop() || '';
+                    const extMatch = filename.match(/\.([a-zA-Z0-9]+)$/);
+                    return {
+                        original_name: filename || 'unknown',
+                        ext: extMatch ? extMatch[1].toLowerCase() : 'unknown'
+                    };
+                } catch(e) {
+                    return { original_name: 'unknown', ext: 'unknown' };
+                }
+            }
 
             function getAbsoluteUrl(url) {
                 try {
-                    // 自动补全相对路径，并返回包含所有参数的完整标准 URL (href)
                     return new URL(url, window.location.href).href;
                 } catch(e) {
                     return url;
@@ -31,9 +109,13 @@ pub async fn init_sniffer(url: String, app: AppHandle) -> Result<(), String> {
                 try {
                     const absUrl = getAbsoluteUrl(url);
 
-                    // 【精准去重】严格要求包含参数在内的完整链接完全一致，才会被判定为重复并拦截
                     if (emittedUrls.has(absUrl)) return;
                     emittedUrls.add(absUrl);
+
+                    const fileInfo = extractFileInfo(absUrl);
+                    
+                    // 过滤常见的广告碎切片或极小图标 (基于扩展名简单前置过滤)
+                    if (['png', 'jpg', 'jpeg', 'gif', 'svg', 'ico', 'js', 'css', 'woff2'].includes(fileInfo.ext)) return;
 
                     console.log(`[DL-Omni] 捕获媒体流 (${source}):`, absUrl);
 
@@ -43,14 +125,16 @@ pub async fn init_sniffer(url: String, app: AppHandle) -> Result<(), String> {
                         "Cookie": document.cookie || ""
                     };
 
-                    // 修正 IPC 嵌套结构，恢复 Tauri 2 原生的扁平 Payload 结构
                     if (window.__TAURI_INTERNALS__ && typeof window.__TAURI_INTERNALS__.invoke === 'function') {
                         window.__TAURI_INTERNALS__.invoke("plugin:event|emit", {
                             event: "sniffed_resource",
                             payload: {
                                 url: absUrl,
                                 type: type,
-                                filename: `嗅探资源 [${source}]`,
+                                filename: `嗅探资源 [${source}]`, // 兼容旧版字段
+                                page_title: getPageMetadata(),
+                                original_name: fileInfo.original_name,
+                                ext: fileInfo.ext,
                                 headers: headers
                             }
                         }).catch(err => console.error("[DL-Omni] IPC 失败:", err));
@@ -87,7 +171,6 @@ pub async fn init_sniffer(url: String, app: AppHandle) -> Result<(), String> {
             // ==========================================
             function heuristicMatch(url) {
                 const u = url.toLowerCase();
-                // 针对 PikPak 增加 /download/ 路径的严格限制，避免误抓普通 API 接口
                 if ((u.includes('mypikpak.com') || u.includes('pikpak.io') || u.includes('pikpak.net')) && u.includes('/download/') && (u.includes('sign=') || u.includes('signature='))) return 'PikPak';
                 if ((u.includes('aliyundrive.net') || u.includes('alipan.com')) && (u.includes('signature=') || u.includes('auth_key='))) return 'AliYunPan';
                 return null;
@@ -126,7 +209,6 @@ pub async fn init_sniffer(url: String, app: AppHandle) -> Result<(), String> {
 
                         try {
                             const data = JSON.parse(text);
-                            // 【核心修复】修复 JSON 遍历，采用白名单+黑名单结合，防止误抓数组里的心跳接口
                             const findUrl = (obj) => {
                                 if (!obj || typeof obj !== 'object') return;
                                 for (const key in obj) {
@@ -134,18 +216,15 @@ pub async fn init_sniffer(url: String, app: AppHandle) -> Result<(), String> {
                                         const k = key.toLowerCase();
                                         const v = obj[key].toLowerCase();
 
-                                        // 1. 如果 JSON 内的链接直接符合 PikPak / 阿里云盘 的规则，直接提取
                                         const nestedMatch = heuristicMatch(obj[key]);
                                         if (nestedMatch) {
                                             tryEmit(obj[key], 'video', `${source} - API 安全解析 (${nestedMatch})`);
                                             continue;
                                         }
 
-                                        // 2. 黑名单过滤：排除明显的无效接口 (心跳、配置、日志、上报等)
                                         const isGarbage = v.includes('.health') || v.includes('config') || v.includes('/log') || v.includes('/report');
                                         if (isGarbage) continue;
 
-                                        // 3. 白名单提取：包含明确视频后缀，或者键名明确指向播放地址
                                         const hasMediaExt = v.includes('.mp4') || v.includes('.m3u8') || v.includes('.flv') || v.includes('.mkv');
                                         const isPlayKey = k.includes('play') || k.includes('video') || k.includes('m3u8');
 
@@ -159,7 +238,6 @@ pub async fn init_sniffer(url: String, app: AppHandle) -> Result<(), String> {
                             };
                             findUrl(data);
                         } catch(jsonErr) {
-                            // 正则兜底：应对非标 JSON 或某些特定平台的粗暴提取
                             const dyMatch = text.match(/"url_list"\s*:\s*\["([^"]+)"\]/);
                             if (dyMatch && dyMatch[1]) tryEmit(dyMatch[1].replace(/\\u0026/g, '&'), 'video', `${source} - 正则兜底`);
                         }
@@ -173,12 +251,10 @@ pub async fn init_sniffer(url: String, app: AppHandle) -> Result<(), String> {
             const originalFetch = window.fetch;
             window.fetch = async function(...args) {
                 const reqUrl = typeof args[0] === 'string' ? args[0] : (args[0] && args[0].url ? args[0].url : '');
-
                 const hMatch = heuristicMatch(reqUrl);
                 if (hMatch) {
                     tryEmit(reqUrl, 'video', `Fetch - 启发式 (${hMatch})`);
                 }
-
                 const response = await originalFetch.apply(this, args);
                 inspectResponse(reqUrl, response.clone(), 'Fetch');
                 return response;
@@ -203,7 +279,6 @@ pub async fn init_sniffer(url: String, app: AppHandle) -> Result<(), String> {
                         const fakeRes = {
                             headers: new Headers({ 'content-type': contentType }),
                             text: async () => {
-                                // 放开对 json 响应类型的读取，防止提取特征失败
                                 if (this.responseType === '' || this.responseType === 'text') {
                                     return this.responseText;
                                 } else if (this.responseType === 'json') {
@@ -240,6 +315,25 @@ pub async fn init_sniffer(url: String, app: AppHandle) -> Result<(), String> {
         })();
     "#;
 
+    // 【新增】监听 Webview 传回的 Cookie，保存至本地 cookies.txt
+    let app_handle_clone = app.clone();
+    app.listen("sniffed_cookie", move |event| {
+        if let Ok(payload) = serde_json::from_str::<serde_json::Value>(event.payload()) {
+            if let (Some(domain), Some(cookie)) = (payload.get("domain").and_then(|d| d.as_str()), payload.get("cookie").and_then(|c| c.as_str())) {
+                let cookie_path = get_internal_cookie_path(&app_handle_clone);
+                
+                // 为了简单起见，这里选择覆盖模式或追加模式
+                // 由于各大流媒体的 cookie 参数各不相同，这里用覆盖模式保证最新状态。
+                // 写入符合 Netscape HTTP Cookie File 规范的头部
+                let mut content = String::from("# Netscape HTTP Cookie File\n");
+                content.push_str("# This file was generated by DL-Omni Internal Sniffer\n\n");
+                content.push_str(&format_cookie_to_netscape(domain, cookie));
+
+                let _ = fs::write(&cookie_path, content);
+            }
+        }
+    });
+
     WebviewWindowBuilder::new(&app, label, WebviewUrl::External(url.parse().unwrap()))
         .title("DL-Omni - 资源嗅探器 (猫抓级多路引擎)")
         .inner_size(1100.0, 800.0)
@@ -254,5 +348,6 @@ pub async fn stop_sniffer(app: AppHandle) -> Result<(), String> {
     if let Some(win) = app.get_webview_window("sniffer_window") {
         win.close().map_err(|e| format!("关闭嗅探窗口失败: {}", e))?;
     }
+    // 不强制要求在停止时监听取消绑定（App 销毁时自动销毁）
     Ok(())
 }

@@ -11,7 +11,6 @@ pub enum TaskStatus {
     Completed,
 }
 
-// 【修复】为 TaskStatus 补充双向字符串转换，替代容易出错的 serde_json 强转替换
 impl TaskStatus {
     pub fn as_str(&self) -> &'static str {
         match self {
@@ -124,8 +123,10 @@ pub struct Config {
     pub split_audio_video: bool,
     pub video_quality: String,
     pub audio_quality: String,
-    pub browser_cookie: Option<String>,
+    pub use_cookie: bool,          // 修改：是否使用内置浏览器的 Cookie
     pub include_metadata: bool,
+    pub naming_template: String,   // 新增：命名的自定义占位符模板
+    pub sniff_blacklist: String,   // 新增：嗅探器的自定义正则过滤黑名单
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -133,5 +134,8 @@ pub struct SniffedResource {
     pub url: String,
     pub r#type: String, 
     pub filename: String,
+    pub page_title: Option<String>,     // 新增：抓取时的网页 Title
+    pub original_name: Option<String>,  // 新增：推断的 URL 文件名
+    pub ext: Option<String>,            // 新增：推断的扩展名
     pub headers: Option<std::collections::HashMap<String, String>>, 
 }
