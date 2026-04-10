@@ -2,7 +2,7 @@
   import { taskStore } from '$lib/stores/tasks.svelte';
   import { configStore } from '$lib/stores/config.svelte';
   import { IPC } from '$lib/api/ipc';
-  import { formatUrl, extractUrls } from '$lib/utils/url';
+  import { formatUrl, extractUrls, extractMagnetDn } from '$lib/utils/url';
   import ProgressBar from '$lib/components/ui/ProgressBar.svelte';
   import Modal from '$lib/components/ui/Modal.svelte';
   import type { MediaInfo } from '$lib/types';
@@ -55,7 +55,7 @@
       if (singleUrl) {
         urls.push(singleUrl);
       } else {
-        parseError = '未检测到有效的流媒体链接';
+        parseError = '未检测到有效的链接';
         return;
       }
     }
@@ -72,6 +72,22 @@
     }
     
     const finalUrl = urls[0];
+
+    // 磁力链接特殊处理：提取 dn 参数并跳转至嗅探页面的 Google CSE 聚合搜索
+    if (finalUrl.toLowerCase().startsWith('magnet:')) {
+      const dn = extractMagnetDn(finalUrl);
+      if (dn) {
+        showNewTaskModal = false;
+        inputUrl = '';
+        const searchUrl = `https://cse.google.com.hk/cse?cx=e7dbb37893b8e4dbf&q=${encodeURIComponent(dn)}`;
+        goto(`/sniffer?url=${encodeURIComponent(searchUrl)}`);
+      } else {
+        parseError = '无法从磁力链接中提取 dn (显示名称) 参数进行搜索';
+      }
+      isParsing = false;
+      return;
+    }
+
     try {
       const info = await IPC.parseUrl(finalUrl);
       parsedInfo = info;
@@ -145,7 +161,6 @@
   async function handleToggleTask(taskId: string, status: string) {
     try {
       if (status === 'paused' || status === 'error') {
-        // 【核心修改】如果是错误状态，先在前端重置进度条和错误文本，提供极速交互反馈
         if (status === 'error') {
           taskStore.resetTaskStateForRetry(taskId);
         } else {
@@ -308,7 +323,7 @@
         </div>
       {/if}
       <div class="text-[11px] text-zinc-500">
-        💡 提示：支持一键混贴包含多个链接的文本。若直接解析失败或遭遇防盗链，将自动跳转至“嗅探”功能。
+        💡 提示：支持一键混贴包含多个链接的文本，磁力链接将自动跳转网盘聚合搜索。
       </div>
     </div>
   </Modal>
