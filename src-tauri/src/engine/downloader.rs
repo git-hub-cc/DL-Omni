@@ -250,25 +250,31 @@ pub async fn download_native(_app: AppHandle, state: AppState, task: &Task) -> R
         let mut last_save = tokio::time::Instant::now();
 
         while let Some((chunk_id, offset, chunk_data)) = rx.recv().await {
-            if file.seek(SeekFrom::Start(offset)).await.is_ok() {
-                if file.write_all(&chunk_data).await.is_ok() {
-                    let len = chunk_data.len() as u64;
-                    writer_downloaded.fetch_add(len, Ordering::Relaxed);
-                    
-                    if !is_stream {
-                        writer_state.chunks[chunk_id].current_offset += len;
-                        if writer_state.chunks[chunk_id].current_offset >= (writer_state.chunks[chunk_id].end - writer_state.chunks[chunk_id].start + 1) {
-                            writer_state.chunks[chunk_id].is_completed = true;
-                        }
+            // 【修复】捕获并暴露文件系统写入错误
+            if let Err(e) = file.seek(SeekFrom::Start(offset)).await {
+                tracing::error!("分片寻址失败: {}", e);
+                break; 
+            }
+            if let Err(e) = file.write_all(&chunk_data).await {
+                tracing::error!("写入文件系统失败: {}", e);
+                break;
+            }
+            
+            let len = chunk_data.len() as u64;
+            writer_downloaded.fetch_add(len, Ordering::Relaxed);
+            
+            if !is_stream {
+                writer_state.chunks[chunk_id].current_offset += len;
+                if writer_state.chunks[chunk_id].current_offset >= (writer_state.chunks[chunk_id].end - writer_state.chunks[chunk_id].start + 1) {
+                    writer_state.chunks[chunk_id].is_completed = true;
+                }
 
-                        // 限流刷盘（每 1.5 秒更新一次 .part 文件）
-                        if last_save.elapsed().as_millis() >= 1500 {
-                            if let Ok(json) = serde_json::to_string(&writer_state) {
-                                let _ = tokio::fs::write(&part_path_clone, json).await;
-                            }
-                            last_save = tokio::time::Instant::now();
-                        }
+                // 限流刷盘（每 1.5 秒更新一次 .part 文件）
+                if last_save.elapsed().as_millis() >= 1500 {
+                    if let Ok(json) = serde_json::to_string(&writer_state) {
+                        let _ = tokio::fs::write(&part_path_clone, json).await;
                     }
+                    last_save = tokio::time::Instant::now();
                 }
             }
         }
@@ -381,20 +387,37 @@ pub async fn download_native(_app: AppHandle, state: AppState, task: &Task) -> R
                                 continue;
                             }
 
-                            while let Ok(Some(bytes)) = res.chunk().await {
-                                let len = bytes.len() as u64;
-                                if tx_clone.send((chunk.id, start + (local_offset - chunk.current_offset), bytes)).await.is_err() {
-                                    return Err("分片写入通道已关闭".into());
+                            // 【修复】使用 loop + match 替代 while let，精准捕获连接重置异常
+                            loop {
+                                match res.chunk().await {
+                                    Ok(Some(bytes)) => {
+                                        let len = bytes.len() as u64;
+                                        // 【修复】绝对写入偏移量始终是 chunk.start + local_offset，拒绝二次位移
+                                        if tx_clone.send((chunk.id, chunk.start + local_offset, bytes)).await.is_err() {
+                                            return Err("分片写入通道已关闭，可能是磁盘写入失败".into());
+                                        }
+                                        local_offset += len;
+                                        retries = 0; // 有效读取，重置尝试次数
+                                    },
+                                    Ok(None) => {
+                                        break; // 数据流正常结束
+                                    },
+                                    Err(e) => {
+                                        tracing::warn!("分片 [{}] 底层网络流异常断开: {}", chunk.id, e);
+                                        break; // 触发外层重试
+                                    }
                                 }
-                                local_offset += len;
-                                retries = 0; 
                             }
 
                             if local_offset >= (chunk.end - chunk.start + 1) {
-                                break;
+                                break; // 分片物理下载完成
                             } else {
-                                // 意外中断，进入下一轮重试循环
+                                // 【修复】补充意外中断后的重试上限拦截与退避逻辑
                                 retries += 1;
+                                if retries > 5 {
+                                    return Err(format!("分片 [{}] 数据流多次中断，超过重试上限", chunk.id));
+                                }
+                                tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
                             }
                         }
                         Err(e) => {
