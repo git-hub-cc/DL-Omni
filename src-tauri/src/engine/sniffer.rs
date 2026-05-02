@@ -1,4 +1,4 @@
-use tauri::{AppHandle, Listener, Manager, WebviewUrl, WebviewWindowBuilder};
+use tauri::{AppHandle, Listener, Manager, WebviewUrl, WebviewWindowBuilder, Emitter};
 use std::fs;
 
 /// 获取应用专用的内置 cookies.txt 路径
@@ -78,12 +78,19 @@ pub async fn init_sniffer(url: String, app: AppHandle) -> Result<(), String> {
         }
     });
 
-    WebviewWindowBuilder::new(&app, label, WebviewUrl::External(url.parse().unwrap()))
+    let win = WebviewWindowBuilder::new(&app, label, WebviewUrl::External(url.parse().unwrap()))
         .title("DL-Omni - 资源嗅探器 (猫抓级多路引擎)")
         .inner_size(1100.0, 800.0)
         .initialization_script(&init_script)
         .build()
         .map_err(|e| format!("无法创建嗅探窗口: {}", e))?;
+
+    let app_clone = app.clone();
+    win.on_window_event(move |event| {
+        if let tauri::WindowEvent::Destroyed = event {
+            let _ = app_clone.emit("sniffer_window_closed", ());
+        }
+    });
 
     Ok(())
 }

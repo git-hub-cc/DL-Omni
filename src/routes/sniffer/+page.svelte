@@ -14,8 +14,9 @@
   let showDrawer = $state(false);
   let isSniffing = $state(false);
   let unlisten: UnlistenFn | null = null;
+  let unlistenClosed: UnlistenFn | null = null;
 
-  // 新增：抽屉层交互状态
+  // 抽屉层交互状态
   let isPaused = $state(false); // 是否暂停接收新嗅探结果
   let filterText = $state('');  // 搜索过滤文本
   let selectedUrls = $state<Set<string>>(new Set()); // 选中的资源 URL 集合
@@ -61,10 +62,15 @@
         capturedResources = [resource, ...capturedResources];
       }
     });
+
+    unlistenClosed = await IPC.listenSnifferClosed(() => {
+      isSniffing = false;
+    });
   });
 
   onDestroy(async () => {
     if (unlisten) unlisten();
+    if (unlistenClosed) unlistenClosed();
     if (isSniffing) await IPC.stopSniffing();
   });
 
@@ -184,7 +190,6 @@
     {/if}
   </div>
 
-  <!-- 悬浮按钮 -->
   <button
     class="absolute right-8 bottom-8 w-14 h-14 bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 rounded-full shadow-xl flex items-center justify-center z-40 group"
     onclick={() => showDrawer = !showDrawer}
@@ -197,7 +202,6 @@
     {/if}
   </button>
 
-  <!-- 底部抽屉 -->
   {#if showDrawer}
     <div
       class="absolute inset-0 bg-black/60 backdrop-blur-sm z-40"
@@ -209,14 +213,12 @@
     ></div>
 
     <div class="absolute inset-x-0 bottom-0 h-[34rem] bg-zinc-900 border-t border-zinc-700 shadow-2xl flex flex-col z-50">
-      <!-- 抽屉头部 (标题 & 操作) -->
       <div class="flex flex-col p-4 border-b border-zinc-800/80 space-y-3 bg-zinc-900 shrink-0">
         <div class="flex justify-between items-center">
           <h3 class="text-sm font-medium text-zinc-100 flex items-center">
             嗅探到的资源 <span class="ml-2 px-1.5 py-0.5 bg-zinc-800 rounded text-xs">{filteredResources.length}</span>
           </h3>
           <div class="flex items-center space-x-2">
-            <!-- 暂停/继续接收按钮 -->
             <button
               class="flex items-center space-x-1 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors border {isPaused ? 'bg-emerald-500/10 text-emerald-500 border-emerald-500/20 hover:bg-emerald-500/20' : 'bg-zinc-800 text-zinc-300 border-zinc-700 hover:bg-zinc-700'}"
               onclick={() => isPaused = !isPaused}
@@ -240,7 +242,6 @@
           </div>
         </div>
 
-        <!-- 筛选与批量操作栏 -->
         <div class="flex items-center space-x-3">
           <button
             class="flex items-center space-x-1.5 px-3 py-1.5 bg-zinc-800/50 hover:bg-zinc-800 border border-zinc-700/50 rounded-md text-xs text-zinc-300 transition-colors shrink-0"
@@ -274,7 +275,6 @@
         </div>
       </div>
 
-      <!-- 列表内容区 -->
       <div class="flex-1 overflow-y-auto p-4 space-y-2">
         {#if filteredResources.length === 0}
           <div class="h-full flex flex-col items-center justify-center text-zinc-600 space-y-2">
@@ -283,8 +283,6 @@
           </div>
         {:else}
           {#each filteredResources as res (res.url)}
-            <!-- svelte-ignore a11y_click_events_have_key_events -->
-            <!-- svelte-ignore a11y_no_static_element_interactions -->
             <div
               class="flex flex-col p-3 bg-zinc-800/30 border {selectedUrls.has(res.url) ? 'border-accent-blue/50 bg-accent-blue/5' : 'border-zinc-800'} rounded-lg hover:bg-zinc-800/60 transition-colors cursor-pointer"
               onclick={() => toggleSelection(res.url)}

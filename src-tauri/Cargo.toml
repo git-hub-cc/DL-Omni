@@ -7,7 +7,7 @@ edition = "2021"
 
 [lib]
 name = "dl_omni_lib"
-crate-type = ["staticlib", "cdylib", "rlib"]
+crate-type = ["rlib"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

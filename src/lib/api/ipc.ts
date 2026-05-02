@@ -83,5 +83,11 @@ export const IPC = {
         callback(event.payload);
       }
     });
+  },
+
+  async listenSnifferClosed(callback: () => void): Promise<UnlistenFn> {
+    return await listen('sniffer_window_closed', () => {
+      callback();
+    });
   }
 };
